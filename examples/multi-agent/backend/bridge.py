@@ -50,7 +50,7 @@ from snail.session import Session
 from snail.tools import ToolRegistry
 from snail.vendor import Interrupted, MediaChunk, ResponseModality
 
-from .agents import ECHO_ID, HOST_ID, POOL_KEY, SPECS, TRANSLATE_ID
+from .agents import ECHO_ID, HOST_ID, POOL_KEY, REANCHOR, SPECS, TRANSLATE_ID
 from .events import active_agent_changed, error as err_event, to_client_json
 from .routing import build_policy
 from .tools import echo_tools, host_tools
@@ -220,6 +220,18 @@ class MultiAgentBridge:
         self._pipeline.cut()
         log.info("promote → %s", agent_id)
         asyncio.create_task(self._emit(active_agent_changed(agent_id)))
+        # re-anchor the agent's behavior after an excursion (non-triggering context turn).
+        reanchor = REANCHOR.get(agent_id)
+        if reanchor is not None:
+            asyncio.create_task(self._reanchor(agent_id, reanchor))
+
+    async def _reanchor(self, cid: str, text: str) -> None:
+        conn = self._conns.get(cid)
+        if conn is not None:
+            try:
+                await conn.send_turns([Item(role=Role.USER, text=text)], complete=False)
+            except Exception:  # noqa: BLE001 - best-effort re-anchor
+                pass
 
     def _on_demote(self, agent_id: str) -> None:
         # Drop the ex-active's user-audio subscription (re-subscribed on promote). Do NOT
@@ -309,7 +321,11 @@ class MultiAgentBridge:
                     self._pipeline.cut()
                 j = to_client_json(ev, agent_id=cid)
                 if j is not None:
-                    log.info("event %s from %s", j["type"], cid)
+                    txt = j.get("text")
+                    if txt is not None:
+                        log.info("event %s from %s: %r", j["type"], cid, txt[:80])
+                    else:
+                        log.info("event %s from %s", j["type"], cid)
                     await self._emit(j)
             await session.on_vendor_raw(raw)
 

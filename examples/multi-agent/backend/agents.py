@@ -132,6 +132,17 @@ SPECS = {
     TRANSLATE_ID: build_translate_spec(),
 }
 
+#: A short context turn injected when an agent is promoted, to re-anchor its behavior
+#: after an excursion to another agent (the static system_instruction alone drifts on a
+#: long-lived socket). Injected non-triggering (does not make the agent speak).
+REANCHOR = {
+    HOST_ID: (
+        "[system] Control has returned to you, the host. Ignore anything the echo or "
+        "translate agents were doing. Do NOT repeat the user's words and do NOT "
+        "translate — just answer the user normally as the host."
+    ),
+}
+
 #: Which connection pool serves each agent. host + echo share the "main" pool (same
 #: backend + adapter); translate needs the Dev-API "translate" pool (different model +
 #: adapter). Keyed by purpose, not backend, so it holds even if host/echo also run on Dev.
