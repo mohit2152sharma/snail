@@ -18,15 +18,17 @@ import uvicorn
 from fastapi import FastAPI, WebSocket
 
 from snail.connections import ConnectionPool, GeminiConnector
-from snail.vendor import Backend, GeminiAdapter
+from snail.vendor import Backend
 
+from .adapter import VadGeminiAdapter
 from .agents import BACKEND, MODEL
 from .bridge import MultiAgentBridge
 
 
 def build_pool() -> ConnectionPool:
-    # host + echo share model + backend → one adapter/connector.
-    adapter = GeminiAdapter(backend=BACKEND, model=MODEL)
+    # host + echo share model + backend → one adapter/connector. VAD adapter turns on
+    # Gemini's server-side activity detection.
+    adapter = VadGeminiAdapter(backend=BACKEND, model=MODEL)
     if BACKEND is Backend.GEMINI_VERTEX:
         # ADC auth (gcloud auth application-default login) + project/location.
         # google-auth does NOT expand '~' in this path → expand it ourselves.
@@ -42,14 +44,14 @@ def build_pool() -> ConnectionPool:
                 "GOOGLE_CLOUD_LOCATION), and authenticate with ADC "
                 "(`gcloud auth application-default login`)."
             )
-        client = GeminiAdapter.build_client(
+        client = VadGeminiAdapter.build_client(
             Backend.GEMINI_VERTEX, project=project, location=location
         )
     else:
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
             raise RuntimeError("Dev backend: set GEMINI_API_KEY.")
-        client = GeminiAdapter.build_client(Backend.GEMINI_DEV, api_key=key)
+        client = VadGeminiAdapter.build_client(Backend.GEMINI_DEV, api_key=key)
     connector = GeminiConnector(client=client, adapter=adapter)
     return ConnectionPool(connector=connector, max_warm=4)
 
