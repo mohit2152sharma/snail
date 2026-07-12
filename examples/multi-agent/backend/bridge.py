@@ -161,9 +161,13 @@ class MultiAgentBridge:
         ev = self._active_ev[cid]
         while not self._closing:
             if not ev.is_set():
-                await ev.wait()
+                await ev.wait()  # never-activated agent: park until first promote
                 continue
-            await conn.run(on_msg, on_audio=on_audio)
+            await conn.run(on_msg, on_audio=on_audio)  # one turn; re-enter for the next
+            # If demoted (inactive) and receive() returned instantly, back off so an
+            # idle drained socket can't hot-spin the loop.
+            if self._router.active_id != cid and not self._closing:
+                await asyncio.sleep(0.1)
 
     async def _setup(self) -> None:
         event_log = EventLog()
@@ -215,9 +219,10 @@ class MultiAgentBridge:
         asyncio.create_task(self._emit(active_agent_changed(agent_id)))
 
     def _on_demote(self, agent_id: str) -> None:
-        # park the ex-active's receive loop + drop its user-audio subscription
-        # (both re-established on promote back).
-        self._active_ev[agent_id].clear()
+        # Drop the ex-active's user-audio subscription (re-subscribed on promote). Do NOT
+        # park its receive loop: it must keep draining so a trailing post-tool turn (e.g.
+        # the host's confirmation generated after the control tool) is consumed and
+        # *dropped* here, not left buffered to replay when the agent is promoted back.
         self._pipeline.detach_consumer(agent_id)
         log.info("demote → %s", agent_id)
 

@@ -14,3 +14,7 @@ wheels/
 
 # Tooling caches
 .codegraph/
+
+# local secrets (never commit)
+.env
+**/.env

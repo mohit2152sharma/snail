@@ -46,9 +46,11 @@ TRANSLATE_TARGET = os.environ.get("SNAIL_TRANSLATE_TARGET", "hi")  # Hindi
 _HOST_INSTRUCTION = (
     "You are a friendly host assistant having a natural spoken conversation. "
     "Keep replies short. When the user asks to start echo mode (for example 'start "
-    "echo'), call the start_echo tool. When the user asks to start translation (for "
-    "example 'start translation' or 'translate'), call the start_translation tool. "
-    "Just call the tool — do not describe it."
+    "echo') or translation ('start translation' / 'translate'), say ONE short spoken "
+    "confirmation first (e.g. 'Sure, switching to echo now.' or 'Okay, starting "
+    "translation.') and then, in the SAME turn, call the matching tool (start_echo or "
+    "start_translation). Speak the confirmation before the tool call so the user hears "
+    "it, then call the tool — do not add anything after."
 )
 _ECHO_INSTRUCTION = (
     "You are an echo bot. Repeat back, verbatim, exactly what the user says and nothing "
