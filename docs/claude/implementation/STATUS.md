@@ -5,7 +5,7 @@ Legend: ✅ done + tested · 🟡 partial · ⬜ not started · 🔑 needs live 
 
 _Last updated: 2026-07-12._
 
-## Built (key-free, unit-tested — 194 tests green)
+## Built (key-free, unit-tested — 200 tests green)
 
 | Module | What | Docs | TODOs resolved |
 |---|---|---|---|
@@ -42,7 +42,9 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
 
 - 🟡 `snail.audio` pipeline — ✅ **cleaner** (`RNNoiseCleaner` + 480-`Rechunker`,
   `DenoiseBackend` injected), ✅ **resample** (`LazyResampler`: no-op at equal rate, one
-  stateful converter memoized per distinct `(from,to)`; `ResampleBackend`→soxr injected),
+  stateful converter memoized per distinct `(from,to)`; ✅ **real `SoxrResampleBackend`**
+  (libsoxr, guarded import, stateful `ResampleStream` per rate-pair, ~341-sample fixed
+  latency @48k→16k)),
   ✅ **codec** (`AudioCodec` seam; `PcmCodec` PCM16LE v0 = today's client wire; opus binding
   later), ✅ **jitter buffer** (`JitterBuffer`: prebuffer→PLAYING→underrun-rearm, boundary-
   stitching drain, `flush` for cut; feeds `OutputGate`). All dep-free (native bindings
@@ -78,5 +80,5 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
 ## How to run
 
 ```
-uv run pytest            # 194 tests, <1s, no network/key
+uv run pytest            # 200 tests, <1s, no network/key
 ```
