@@ -1,0 +1,29 @@
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant AU as Audio plane
+  participant V as VendorAdapter (active)
+  participant R as Router
+  participant TCR as ToolCallRegistry
+  participant TR as ToolRegistry
+  participant LOG as Event Log
+
+  U->>AU: speech (opus)
+  AU->>AU: decode, clean @48k
+  AU->>V: fan-out to active (GATE1), down-rate, base64
+  V->>LOG: append user_speech (transcript)
+  V-->>R: ToolCall(call_id,name,args)  [INTENT]
+  R->>R: classify (agent vs control) + authorize (exposure != authority)
+  alt execute
+    R->>TCR: register call_id -> PendingCall{future}
+    TCR->>LOG: append tool_call
+    R->>TR: dispatch handler(args)
+    TR-->>TCR: value (validate vs output_schema)
+    TCR->>LOG: append tool_result (envelope)
+    TCR-->>V: serialize ToolResult -> vendor wire
+    V->>AU: agent audio (if response_mode=speak)
+    AU->>U: speaker (token holder only, GATE2)
+  else blocked / skipped / handoff
+    R-->>V: terminal envelope (blocked|skipped)
+    Note over TCR: INVARIANT every call_id -> exactly 1 result
+  end

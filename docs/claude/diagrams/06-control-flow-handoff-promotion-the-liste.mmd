@@ -1,0 +1,26 @@
+sequenceDiagram
+  autonumber
+  participant V as Active agent
+  participant R as Router
+  participant POL as RoutingPolicy
+  participant L as Listener warm/subscribed
+  participant OG as OutputGate
+
+  V-->>R: transfer_to target OR rule/programmatic signal
+  R->>POL: decide RoutingSignal
+  POL-->>R: RoutingDecision action=HANDOFF target seam
+  Note over R: health-gate target for TTL headroom, never promote stale socket
+  alt seam is AT_TURN_END default
+    Note over V: active keeps token, finishes utterance, buffer drains naturally
+  else seam is CUT_NOW
+    R-->>OG: revoke plus flush, see barge-in
+  end
+  alt target is TEXT-modality listener
+    R-->>L: modality flip text to audio
+    Note over L: TODO gemini-modality-flip 09E, NOT free on Gemini<br/>response_modalities is setup config, needs resumption/reconnect
+  else target is AUDIO-modality listener
+    Note over L: no flip needed, near-atomic promote (audio-out cost paid while listening)
+  end
+  R-->>OG: grant token to target
+  R-->>V: demote to listener, release token, vendor cancel, optional flip audio to text
+  Note over L: TODO listener-context 09E, listener heard only USER audio<br/>not the active agent turns, context-current claim unresolved

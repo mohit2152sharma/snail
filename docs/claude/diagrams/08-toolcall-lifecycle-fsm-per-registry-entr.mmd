@@ -1,0 +1,25 @@
+stateDiagram-v2
+  [*] --> received
+  received --> validating
+  validating --> invalid_args: input_schema fail
+  validating --> executing
+  executing --> resolving
+  resolving --> done
+  invalid_args --> done
+  executing --> awaiting_external: deferred path
+  awaiting_external --> done
+  received --> cancelled: barge-in / handoff / close
+  validating --> cancelled
+  executing --> cancelled
+  resolving --> cancelled
+  received --> timeout: deadline fired
+  validating --> timeout
+  executing --> timeout
+  cancelled --> done
+  timeout --> done
+  done --> [*]
+
+  note right of executing
+    executing = INTERNAL only,
+    never a terminal envelope status
+  end note

@@ -1,0 +1,101 @@
+flowchart TB
+  %% ---------- CLIENT LEG ----------
+  subgraph CLIENT["CLIENT LEG — we control: binary WS + opus (PCM opt-in)"]
+    MIC["mic — opus/pcm bytes"]
+    SPK["speaker — opus bytes"]
+  end
+
+  %% ---------- AUDIO PLANE ----------
+  subgraph AUDIO["AUDIO PLANE — interior 48kHz PCM int16 mono, FramePool free-list"]
+    direction TB
+    DEC["INGRESS decode opus/b64 to PCM, upsample to 48k, acquire AudioFrame"]
+    CLEAN["RNNoise clean @48k (480-sample reframe)"]
+    FANOUT{{"FAN-OUT BUS — 1 producer to N bounded rings, drop-oldest"}}
+    VTX["vendor edge TX — down 48k to 16k/24k, int16 to base64"]
+    VRX["vendor edge RX — decode, up 24k to 48k, acquire AudioFrame"]
+    JIT["jitter buffer — smooth vendor bursts"]
+    OGATE{{"OUTPUTGATE — GATE 2 single atomic token; only holder drains"}}
+    ENC["encode opus to client"]
+  end
+
+  %% ---------- TAP LAYERS ----------
+  SINKS["AudioSink layer — 5 tap points, off hot path, observe never gate, null=0-cost"]
+  OBS["OBSERVER layer — Metric/Event, taps every subsystem, PUSH rare / SAMPLED hot, disposable"]
+
+  %% ---------- ROUTER ----------
+  subgraph ROUTER["ROUTER / ARBITER — owns GATE1 subs, GATE2 token, seam, ToolCallRegistry"]
+    direction TB
+    RPOL["RoutingPolicy.decide(signal) to decision|None — ChainPolicy: ControlTool then Rule then Programmatic then LLM(async)"]
+    RMECH["mechanism: token xfer, subscription flip, seam cut, cancel sweep"]
+    TCR[("ToolCallRegistry — call_id to PendingCall, FSM, single-resolution")]
+  end
+
+  %% ---------- AGENTS ----------
+  subgraph AGENTS["AGENTS — 1 ACTIVE + N LISTENERS"]
+    direction TB
+    ACT["ACTIVE agent — AUDIO out, holds token"]
+    LIS["listener agents — TEXT or AUDIO (per-listener), output suppressed"]
+    ADP["VendorAdapter — Gemini 2.5 Live / OpenAI Realtime"]
+  end
+
+  %% ---------- TOOLS ----------
+  subgraph TOOLS["TOOL LAYER"]
+    TREG["ToolRegistry — static catalog name to Tool{in/out schema, handler}"]
+    TOOL["Tool — stateless, common-denominator schema"]
+    TRES["ToolResult envelope — status,data,reason,retriable,response_mode,speak_directive"]
+  end
+
+  %% ---------- CONTEXT ----------
+  subgraph CTX["CONTEXT MANAGER — single source of truth"]
+    LOG[("append-only EVENT LOG — msgspec structs, audio-free")]
+    PROJ["Projection — spec (declarative) or builder (imperative)"]
+    ITEM["Item[] — vendor-neutral, HARD boundary"]
+  end
+
+  %% ---------- POOL ----------
+  POOL["CONNECTION LIFECYCLE MGR (pool) — pre-warm, park, keepalive, recycle, evict, admission; deadline minus margin; assigned vs unassigned"]
+
+  %% ===== DATA FLOW (solid) =====
+  MIC --> DEC --> CLEAN --> FANOUT
+  FANOUT --> VTX --> ADP
+  ADP --> VRX --> JIT --> OGATE --> ENC --> SPK
+  ADP --- ACT
+  ADP --- LIS
+  TREG --> TOOL
+  TOOL --> TRES
+  LOG --> PROJ --> ITEM --> ADP
+
+  %% audio taps (data)
+  DEC -. INGRESS_RAW .-> SINKS
+  CLEAN -. POST_CLEAN .-> SINKS
+  VTX -. VENDOR_TX .-> SINKS
+  VRX -. VENDOR_RX .-> SINKS
+  ENC -. EGRESS .-> SINKS
+
+  %% ===== CONTROL FLOW (dashed) =====
+  ADP -. "ToolCall intent (call_id,name,args)" .-> ROUTER
+  ADP -. "user/agent speech, tool events, handoff" .-> LOG
+  FANOUT -. "GATE 1 subscribe/unsubscribe" .-> ROUTER
+  ROUTER -. "GATE 1 who hears user audio" .-> FANOUT
+  ROUTER -. "GATE 2 grant/revoke token" .-> OGATE
+  ROUTER -. "promote/demote, modality flip text<->audio" .-> AGENTS
+  ROUTER -. "classify/authorize/decide; register call_id" .-> TCR
+  TCR -. "dispatch handler" .-> TREG
+  TRES -. "append tool_result; resolve future" .-> LOG
+  TRES -. "serialize to vendor; model continues" .-> ADP
+  RPOL -. advice .-> RMECH
+  RMECH -. acts .-> RMECH
+  POOL -. "atomic swap AgentConnection (spec unchanged)" .-> ADP
+  LOG -. "log-replay restore on recycle" .-> POOL
+
+  %% observer taps everything (control/telemetry)
+  AUDIO -. telemetry .-> OBS
+  ROUTER -. telemetry .-> OBS
+  TOOLS -. telemetry .-> OBS
+  POOL -. telemetry .-> OBS
+  AGENTS -. telemetry .-> OBS
+
+  classDef gate fill:#2d3748,stroke:#f6ad55,color:#fff;
+  classDef store fill:#1a365d,stroke:#63b3ed,color:#fff;
+  class FANOUT,OGATE gate;
+  class LOG,TCR store;

@@ -1,0 +1,16 @@
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant VAD as VAD (v1 = vendor server-side)
+  participant R as Router
+  participant OG as OutputGate (GATE2)
+  participant V as VendorAdapter (active)
+  participant TCR as ToolCallRegistry
+
+  U->>VAD: starts speaking over agent output
+  VAD-->>R: interrupt signal
+  R-->>OG: revoke token + FLUSH ring (drop queued audio)
+  R-->>V: vendor cancel/interrupt (stop wasted generation)
+  R-->>TCR: sweep by_response_group -> cancel in-flight -> resolve `cancelled`
+  Note over OG,V: token revoke (user-facing) and vendor cancel (generation) are SEPARATE actions
+  Note over U: TODO(client-protocol 09E): client-side playout still buffered<br/>needs client flush frame + playout position to truly cut

@@ -1,0 +1,17 @@
+stateDiagram-v2
+  [*] --> cold
+  cold --> connecting
+  connecting --> warm
+  warm --> active: promote
+  warm --> listener
+  listener --> active: promote (health-gated)
+  active --> warm: demote (to listener)
+  warm --> recycling: deadline minus margin / GoAway
+  active --> recycling: at safe boundary (never mid-turn)
+  listener --> recycling: anytime (seamless)
+  recycling --> warm: socket swapped, identity kept
+  recycling --> active: socket swapped, identity kept
+  active --> closed
+  listener --> closed
+  warm --> closed
+  closed --> [*]

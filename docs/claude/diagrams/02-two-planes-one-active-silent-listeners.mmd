@@ -1,0 +1,17 @@
+flowchart LR
+  U["user audio (post-clean)"]
+  subgraph IN["INPUT plane — FAN-OUT (GATE 1, Router-controlled)"]
+    A["ACTIVE agent — always subscribed"]
+    L1["listener 1 — AUDIO modality (likely-next, no-flip promote)"]
+    Ln["listener N — TEXT modality (cheap)"]
+  end
+  OG{{"OutputGate — single token (GATE 2)"}}
+  SPK["user speaker"]
+
+  U --> A
+  U -. "subscribe IFF Router chose" .-> L1
+  U -. "subscribe IFF Router chose" .-> Ln
+  A -- "agent audio (token holder)" --> OG --> SPK
+  L1 -. "audio generated then DROPPED (no token)" .-> OG
+  Ln -. "text only, no audio to gate" .-> OG
+  A -. "promotion = token transfer (+text to audio flip only if TEXT listener)" .-> OG

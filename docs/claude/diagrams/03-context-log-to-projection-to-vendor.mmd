@@ -1,0 +1,16 @@
+flowchart TB
+  subgraph EVT["Event types (append-only)"]
+    E["user_speech | agent_speech | tool_call | tool_result | external_context | handoff"]
+  end
+  LOG[("EVENT LOG — canonical msgspec structs, single source of truth")]
+  P1["Projection spec — include/agents/last_n/instructions/extra (~90%)"]
+  P2["Projection builder — imperative escape hatch (~10%)"]
+  ITEM["Item[] — canonical, vendor-neutral — HARD boundary, never raw vendor dicts"]
+  OAI["OpenAI: session.update + conversation.item.create"]
+  GEM["Gemini: setup(systemInstruction+tools) + user/model content turns"]
+
+  E --> LOG
+  LOG --> P1 --> ITEM
+  LOG --> P2 --> ITEM
+  ITEM --> OAI
+  ITEM --> GEM

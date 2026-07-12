@@ -1,0 +1,15 @@
+flowchart TB
+  CLM["ConnectionLifecycleManager — same deadline-minus-margin scheduler for both"]
+  subgraph UN["UNASSIGNED (pool standby)"]
+    U1["SetupParams only, no client bound"]
+    U2["recycle = fresh socket + re-apply SetupParams"]
+    U3["not time-sensitive, fully invisible, background"]
+  end
+  subgraph AS["ASSIGNED (bound to client)"]
+    A1["JoinContext + live conversation"]
+    A2["recycle MUST restore context: native resume OR log-replay"]
+    A3["invisibility depends on role: listener anytime / active at safe boundary"]
+  end
+  CLM --> UN
+  CLM --> AS
+  U2 -. "keeps a fresh standby so promoted socket never stale" .-> AS

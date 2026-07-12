@@ -1,0 +1,32 @@
+[project]
+name = "snail"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "mohit sharma", email = "mohitlakshya@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "google-genai>=2.11.0",
+    "msgspec>=0.21.1",
+    "numpy>=2.5.1",
+]
+
+[project.scripts]
+snail = "snail:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.4.0",
+    "pytest>=9.1.1",
+]
