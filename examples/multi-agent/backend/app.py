@@ -34,7 +34,8 @@ def build_pool() -> ConnectionPool:
         if creds:
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.expanduser(creds)
         project = os.environ.get("GOOGLE_CLOUD_PROJECT")
-        location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+        # 2.5-flash-live is served from the `global` location on Vertex.
+        location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
         if not project:
             raise RuntimeError(
                 "Vertex backend: set GOOGLE_CLOUD_PROJECT (and optionally "

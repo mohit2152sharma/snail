@@ -23,13 +23,13 @@ BACKEND = (
     else Backend.GEMINI_VERTEX
 )
 
-#: Live model id per backend. Vertex (us-central1) currently only serves the 2.0
-#: live-preview; the Dev API serves 2.5-flash-live. Override with SNAIL_GEMINI_MODEL.
+#: Live model id per backend. On Vertex, 2.5-flash-live is served as
+#: ``gemini-live-2.5-flash`` in the ``global`` location (us-central1 only has the 2.0
+#: live-preview); the Dev API serves ``gemini-2.5-flash-live``. Override with
+#: SNAIL_GEMINI_MODEL.
 MODEL = os.environ.get(
     "SNAIL_GEMINI_MODEL",
-    "gemini-2.5-flash-live"
-    if BACKEND is Backend.GEMINI_DEV
-    else "gemini-2.0-flash-live-preview-04-09",
+    "gemini-2.5-flash-live" if BACKEND is Backend.GEMINI_DEV else "gemini-live-2.5-flash",
 )
 
 _HOST_INSTRUCTION = (
