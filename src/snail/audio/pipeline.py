@@ -71,6 +71,29 @@ class AudioPipeline:
         self._in_seq = 0
         self._dropped = 0  # ingress frames lost to pool exhaustion (discontinuities)
 
+    # --- consumer (GATE 1) management ------------------------------------
+
+    def attach_consumer(
+        self, consumer_id: str, *, source: AudioSource, target_rate: int, depth: int = 8
+    ) -> None:
+        """Subscribe a consumer to the fan-out bus (docs 11 GATE 1).
+
+        ``source`` = ``USER_RAW`` / ``USER_CLEAN``; ``target_rate`` is the consumer's
+        vendor input rate (its leg resamples 48k→that, lazily). The active agent is
+        always attached; listeners per the Router.
+        """
+        self._bus.subscribe(
+            consumer_id, source=source, target_rate=target_rate, depth=depth
+        )
+
+    def detach_consumer(self, consumer_id: str) -> int:
+        """Unsubscribe a consumer, releasing its buffered slabs (detach-release)."""
+        return self._bus.unsubscribe(consumer_id)
+
+    def hold_token(self, agent_id: str) -> None:
+        """Give the output token to ``agent_id`` — only its audio reaches the user (GATE 2)."""
+        self._gate.transfer(agent_id)
+
     # --- ingress: client → interior → fan-out ----------------------------
 
     def on_client_audio(self, data: bytes) -> None:

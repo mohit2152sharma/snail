@@ -25,6 +25,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
 
+from snail.audio import AudioPipeline
 from snail.connections import AgentConnection, AgentSpec, ConnectionPool, Connector
 
 from .bridge import ClientBridge, OnMessage
@@ -32,6 +33,8 @@ from .bridge import ClientBridge, OnMessage
 ResolveSpec = Callable[[str], AgentSpec]
 #: build per-connection orchestration; returns the on_message forward (or None).
 SessionFactory = Callable[[AgentConnection], Awaitable[OnMessage | None] | OnMessage | None]
+#: build the per-connection audio plane (or None for straight passthrough).
+PipelineFactory = Callable[[AgentConnection], AudioPipeline]
 
 
 def create_app(
@@ -42,6 +45,7 @@ def create_app(
     input_sample_rate: int = 16000,
     prewarm: Sequence[AgentSpec] = (),
     session_factory: SessionFactory | None = None,
+    pipeline_factory: PipelineFactory | None = None,
     path: str = "/v1/agents/{agent}",
 ) -> FastAPI:
     """Build a FastAPI app that serves the agents and owns the connection pool."""
@@ -77,6 +81,7 @@ def create_app(
             connection=conn,
             input_sample_rate=input_sample_rate,
             on_message=on_message,
+            pipeline=pipeline_factory(conn) if pipeline_factory is not None else None,
         )
         try:
             await bridge.run()

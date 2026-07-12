@@ -5,7 +5,7 @@ Legend: ✅ done + tested · 🟡 partial · ⬜ not started · 🔑 needs live 
 
 _Last updated: 2026-07-12._
 
-## Built (key-free, unit-tested — 189 tests green)
+## Built (key-free, unit-tested — 194 tests green)
 
 | Module | What | Docs | TODOs resolved |
 |---|---|---|---|
@@ -56,8 +56,13 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
   fake for tests), `ClientBridge` (default = agent output→client; mic→`send_realtime`;
   `Interrupted`→client FLUSH; `PlayoutClock` buffered-ahead + cut-reset), `create_app`
   (FastAPI: **server up→pool up (prewarm), server down→pool.aclose()**; one WS = one
-  session; release-on-disconnect). Resolves 09§E `client-protocol`. ⬜ opus codec on the
-  client leg (v0 = raw PCM16); auth / reconnect / client-leg backpressure.
+  session; release-on-disconnect). ✅ **audio-plane wiring**: `ClientBridge` takes an
+  optional `AudioPipeline` — ingress client→plane→drain→vendor, egress vendor→jitter→gate
+  →codec→client, `Interrupted`→`pipeline.cut()`+client FLUSH; auto attach/grant-token on
+  start, detach on teardown. `create_app(session_factory=, pipeline_factory=)` assembles
+  the **end-to-end vertical slice** (transport ↔ pipeline ↔ connection, and ↔ session via
+  `on_message`). Resolves 09§E `client-protocol`. ⬜ opus codec on the client leg (v0 = raw
+  PCM16); auth / reconnect / client-leg backpressure.
 
 ## Blocked on a live Gemini key (Phase 0 spikes — verification, not build)
 
@@ -73,5 +78,5 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
 ## How to run
 
 ```
-uv run pytest            # 189 tests, <1s, no network/key
+uv run pytest            # 194 tests, <1s, no network/key
 ```
