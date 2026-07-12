@@ -1,35 +1,47 @@
-# Multi-agent example — host + echo
+# Multi-agent example — host + echo + translate
 
-Two Gemini agents in one snail session, one client face:
+Three Gemini agents in one snail session, one client face:
 
-- **host** — the default active agent; normal conversation. Has a `start_echo` tool.
-- **echo** — repeats back verbatim what you say. Has a `stop` tool.
+- **host** — default active agent; normal conversation. Tools: `start_echo`,
+  `start_translation`.
+- **echo** — repeats back verbatim what you say. Tool: `stop` (hands back to host).
+- **translate** — Gemini 3.5 Live Translate: translates any language → **Hindi**.
 
-Say **"start echo"** → the host calls `start_echo` → the router hands off to the echo
-agent (at the end of the host's sentence). Say **"stop"** → echo calls `stop` → the
-router hands back to the host, which resumes the conversation.
+Flow:
 
-The shared playground frontend (`../frontend`) drives it over one WebSocket:
-binary frames = Opus audio, text frames = JSON control/events.
+- Say **"start echo"** → host calls `start_echo` → router hands off to echo (at the end
+  of the host's sentence). Say **"stop"** → echo calls `stop` → back to host.
+- Say **"start translation"** → host calls `start_translation` → router hands off to the
+  translate agent; now everything you say comes back in Hindi. Translation mode has **no
+  tools**, so return to host with the **"hand off → host"** button in the UI.
+
+The shared playground frontend (`../frontend`) drives it over one WebSocket: binary
+frames = Opus audio, text frames = JSON control/events.
+
+## Backends (important)
+
+- **host + echo** run on `gemini-live-2.5-flash` — Vertex AI by default (ADC), served
+  from the `global` location. (Set `SNAIL_GEMINI_BACKEND=dev` + `GEMINI_API_KEY` to run
+  them on the Developer API instead.)
+- **translate** uses `gemini-3.5-live-translate-preview`, which is **Developer-API only**
+  (not on Vertex). It always needs `GEMINI_API_KEY`. Without that key the example still
+  runs, but with host + echo only (translate is disabled).
+
+So the full three-agent demo is a **mixed-backend** session: host/echo on Vertex,
+translate on the Dev API.
 
 ## Run
 
-Runs on `gemini-2.5-flash-live`. Defaults to the **Vertex AI** backend (ADC auth).
+1. **Backend** (from the repo root):
 
-1. **Backend** (from the repo root).
-
-   **Vertex AI (default):** authenticate once with ADC, then run:
-
-       gcloud auth application-default login          # one-time, in your own terminal
+       gcloud auth application-default login       # one-time, your own terminal (Vertex ADC)
        GOOGLE_CLOUD_PROJECT=your-project \
-       GOOGLE_CLOUD_LOCATION=us-central1 \
+       GEMINI_API_KEY=your_dev_api_key \
        PYTHONPATH=examples/multi-agent python -m backend.app
        # serves ws://localhost:8000/ws
 
-   **Developer API (alternative):**
-
-       SNAIL_GEMINI_BACKEND=dev GEMINI_API_KEY=your_key \
-       PYTHONPATH=examples/multi-agent python -m backend.app
+   (`GOOGLE_CLOUD_LOCATION` defaults to `global`. Drop `GEMINI_API_KEY` to run host+echo
+   only. `SNAIL_TRANSLATE_TARGET` overrides the target language, default `hi`.)
 
 2. **Frontend**:
 
@@ -37,23 +49,25 @@ Runs on `gemini-2.5-flash-live`. Defaults to the **Vertex AI** backend (ADC auth
 
 3. Open **Chrome** at:
 
-       http://localhost:5173/?title=Multi-Agent&ws=ws://localhost:8000/ws&agents=host,echo
+       http://localhost:5173/?title=Multi-Agent&ws=ws://localhost:8000/ws&agents=host,echo,translate
 
-Grant mic access, click **Start**, and talk. Watch the timeline: `active → host`,
-transcripts, the `start_echo` / `stop` `tool_call` rows, and `active → echo` / `active →
-host` on each handoff. The **hand off** buttons force a switch manually; **Barge-in**
-cuts playout; **Mute** stops the mic.
+Grant mic, click **Start**, talk. Timeline shows `active → host`, transcripts, the
+`start_echo` / `start_translation` / `stop` `tool_call` rows, and `active → …` on each
+handoff. **Hand off** buttons force a switch (and are how you leave translate mode);
+**Barge-in** cuts playout; **Mute** stops the mic.
 
 ## How it maps to snail
 
 | Piece | snail primitive |
 |-------|-----------------|
-| host / echo identity + tools | `AgentSpec` + `SetupParam` (`backend/agents.py`) |
+| agent identity + tools | `AgentSpec` + `SetupParam` (`backend/agents.py`) |
 | tool handlers | `Tool` / `ToolRegistry` (`backend/tools.py`) |
-| `start_echo`→echo, `stop`→host | `RulePolicy` on tool results (`backend/routing.py`) |
+| `start_echo`→echo, `start_translation`→translate, `stop`→host | `RulePolicy` on tool results (`backend/routing.py`) |
+| server-side VAD + translation config | `VadGeminiAdapter` / `TranslateGeminiAdapter` (`backend/adapter.py`) |
 | one active + handoff + token | `Router` + `OutputGate` (`backend/bridge.py`) |
-| mic Opus → 2 agents, active → client | `AudioPipeline` (`FanoutBus` + `OutputGate` + `JitterBuffer` + `OpusCodec`) |
+| mic Opus → agents, active → client | `AudioPipeline` (`FanoutBus` + `OutputGate` + `JitterBuffer` + `OpusCodec`) |
 | per-agent event/tool loop | `Session` (one per connection, shared `Router`) |
+| mixed backends (Vertex + Dev) | one `ConnectionPool` per purpose (`main`, `translate`) |
 
 `snail.transport.ClientBridge` is single-connection; the multi-agent runtime is composed
 in `backend/bridge.py` from the primitives above.

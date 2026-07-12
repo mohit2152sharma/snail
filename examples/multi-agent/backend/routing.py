@@ -24,7 +24,7 @@ from snail.router import (
 )
 from snail.router.predicate import F
 
-from .agents import ECHO_ID, HOST_ID
+from .agents import ECHO_ID, HOST_ID, TRANSLATE_ID
 
 
 def _tool_success(tool_name: str):
@@ -43,6 +43,12 @@ def build_policy() -> tuple[ChainPolicy, ProgrammaticPolicy]:
                 when=_tool_success("start_echo"),
                 then=RoutingDecision(
                     action=RoutingAction.HANDOFF, target=ECHO_ID, seam=Seam.AT_TURN_END
+                ),
+            ),
+            Rule(
+                when=_tool_success("start_translation"),
+                then=RoutingDecision(
+                    action=RoutingAction.HANDOFF, target=TRANSLATE_ID, seam=Seam.AT_TURN_END
                 ),
             ),
             Rule(

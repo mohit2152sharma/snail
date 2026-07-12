@@ -1,4 +1,4 @@
-"""MultiAgentBridge — one client socket ⇄ two live Gemini agents (host + echo).
+"""MultiAgentBridge — one client socket ⇄ N live Gemini agents (host + echo + translate).
 
 The example's own runtime: ``snail.transport.ClientBridge`` is single-connection, so this
 composes the multi-agent story from primitives —
@@ -47,23 +47,36 @@ from snail.router import (
     Seam,
 )
 from snail.session import Session
+from snail.tools import ToolRegistry
 from snail.vendor import Interrupted, MediaChunk, ResponseModality
 
-from .agents import ECHO_ID, HOST_ID, SPECS
+from .agents import ECHO_ID, HOST_ID, POOL_KEY, SPECS, TRANSLATE_ID
 from .events import active_agent_changed, error as err_event, to_client_json
 from .routing import build_policy
 from .tools import echo_tools, host_tools
 
-_AGENT_IDS = (HOST_ID, ECHO_ID)
+
+def _tools_for(cid: str) -> ToolRegistry:
+    if cid == HOST_ID:
+        return host_tools()
+    if cid == ECHO_ID:
+        return echo_tools()
+    return ToolRegistry()  # translate: no tools (model constraint)
 
 
 class MultiAgentBridge:
-    """Pump between one FastAPI WebSocket and the host+echo agents."""
+    """Pump between one FastAPI WebSocket and the multi-agent runtime.
 
-    def __init__(self, *, socket, pool) -> None:
+    ``agent_ids`` is the ordered set of agents to run this session (host first = default
+    active); ``pools`` maps a pool-key (see ``agents.POOL_KEY``) to a ConnectionPool.
+    """
+
+    def __init__(self, *, socket, pools: dict, agent_ids) -> None:
         self._socket = socket
-        self._pool = pool
+        self._pools = pools
+        self._agent_ids = list(agent_ids)
         self._conns: dict[str, object] = {}
+        self._pool_of: dict[str, object] = {}
         self._sessions: dict[str, Session] = {}
         self._tasks: list[asyncio.Task] = []
         self._muted = False
@@ -73,8 +86,7 @@ class MultiAgentBridge:
         self._out_bytes = 0
         # per-agent "you hold the token" gate: only the active agent pumps receive.
         self._active_ev: dict[str, asyncio.Event] = {
-            HOST_ID: asyncio.Event(),
-            ECHO_ID: asyncio.Event(),
+            cid: asyncio.Event() for cid in self._agent_ids
         }
 
         # audio plane — bus + gate are shared with the Router below.
@@ -102,7 +114,6 @@ class MultiAgentBridge:
             on_promote=self._on_promote,
             on_demote=self._on_demote,
         )
-        self._tools = {HOST_ID: host_tools(), ECHO_ID: echo_tools()}
 
     # --- lifecycle --------------------------------------------------------
 
@@ -115,7 +126,7 @@ class MultiAgentBridge:
             await self._release_conns()
             return
         named: dict[asyncio.Task, str] = {}
-        for cid in _AGENT_IDS:
+        for cid in self._agent_ids:
             t = asyncio.create_task(self._agent_loop(cid))
             named[t] = f"run[{cid}]"
             self._tasks.append(t)
@@ -156,10 +167,12 @@ class MultiAgentBridge:
 
     async def _setup(self) -> None:
         event_log = EventLog()
-        for cid in _AGENT_IDS:
-            conn = await self._pool.acquire(SPECS[cid])
+        for cid in self._agent_ids:
+            pool = self._pools[POOL_KEY[cid]]
+            conn = await pool.acquire(SPECS[cid])
             conn.activate()
             self._conns[cid] = conn
+            self._pool_of[cid] = pool
             self._router.register_agent(
                 cid,
                 cid,
@@ -170,7 +183,7 @@ class MultiAgentBridge:
             self._sessions[cid] = Session(
                 adapter=conn.adapter,
                 log=event_log,
-                tools=self._tools[cid],
+                tools=_tools_for(cid),
                 registry=self._registry,
                 router=self._router,
                 send=self._make_send(conn),
@@ -189,8 +202,8 @@ class MultiAgentBridge:
         await self._release_conns()
 
     async def _release_conns(self) -> None:
-        for conn in self._conns.values():
-            await self._pool.release(conn)
+        for cid, conn in self._conns.items():
+            await self._pool_of[cid].release(conn)
         self._conns.clear()
 
     # --- router hooks -----------------------------------------------------

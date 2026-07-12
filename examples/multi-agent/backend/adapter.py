@@ -14,6 +14,32 @@ from google.genai import types
 from snail.vendor import GeminiAdapter
 
 
+class TranslateGeminiAdapter(GeminiAdapter):
+    """GeminiAdapter for Gemini 3.5 Live Translate.
+
+    Translation mode forbids tools + system instructions and instead takes a
+    ``translation_config`` (target language). We build a **minimal** LiveConnectConfig
+    from scratch (not the base ``build_setup``, which would attach tools / instruction /
+    resumption the translate model rejects): response modality + transcriptions (for the
+    timeline) + the translation target.
+    """
+
+    def __init__(self, *, target_language_code: str = "hi", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._target = target_language_code
+
+    def build_setup(self, setup, *, resumption_handle: str | None = None):
+        return types.LiveConnectConfig(
+            response_modalities=[types.Modality.AUDIO],
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+            translation_config=types.TranslationConfig(
+                target_language_code=self._target,
+                echo_target_language=False,
+            ),
+        )
+
+
 class VadGeminiAdapter(GeminiAdapter):
     """GeminiAdapter that enables Gemini's automatic VAD on every connection."""
 

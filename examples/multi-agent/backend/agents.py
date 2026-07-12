@@ -1,8 +1,15 @@
-"""Agent specs for the host+echo multi-agent example.
+"""Agent specs for the host + echo + translate multi-agent example.
 
-Two Gemini Dev-API agents sharing one model. ``host`` is the default active agent and
-carries the ``start_echo`` control tool; ``echo`` repeats the user verbatim and carries
-the ``stop`` tool. Handoff between them is driven by the tool results (see routing.py).
+- ``host`` — default active agent; conversational. Tools: ``start_echo``,
+  ``start_translation``. Runs on the configured backend (Vertex by default).
+- ``echo`` — repeats the user verbatim. Tool: ``stop`` (hands back to host). Same
+  backend as host.
+- ``translate`` — Gemini 3.5 Live Translate: translates any language → Hindi. This model
+  is **Developer-API only** and supports **no tools / no system instruction**, so it
+  always uses ``GEMINI_DEV`` and hands back via the client's manual "hand off" button.
+
+Handoff into echo/translate is tool-result driven (see routing.py); handback from echo is
+its ``stop`` tool, handback from translate is manual.
 """
 
 from __future__ import annotations
@@ -14,28 +21,34 @@ from snail.vendor import Backend, InputSource, ResponseModality, SetupParam, Too
 
 HOST_ID = "host"
 ECHO_ID = "echo"
+TRANSLATE_ID = "translate"
 
-#: Which Gemini backend the example runs on. Vertex (ADC) by default; set
-#: SNAIL_GEMINI_BACKEND=dev for the Developer API (api key).
+#: Backend for host + echo. Vertex (ADC) by default; SNAIL_GEMINI_BACKEND=dev for the
+#: Developer API. (translate is always Dev — the translate model is Dev-only.)
 BACKEND = (
     Backend.GEMINI_DEV
     if os.environ.get("SNAIL_GEMINI_BACKEND", "vertex").lower() == "dev"
     else Backend.GEMINI_VERTEX
 )
 
-#: Live model id per backend. On Vertex, 2.5-flash-live is served as
-#: ``gemini-live-2.5-flash`` in the ``global`` location (us-central1 only has the 2.0
-#: live-preview); the Dev API serves ``gemini-2.5-flash-live``. Override with
-#: SNAIL_GEMINI_MODEL.
+#: Live model for host + echo. On Vertex, 2.5-flash-live is ``gemini-live-2.5-flash`` in
+#: the ``global`` location; the Dev API serves ``gemini-2.5-flash-live``.
 MODEL = os.environ.get(
     "SNAIL_GEMINI_MODEL",
     "gemini-2.5-flash-live" if BACKEND is Backend.GEMINI_DEV else "gemini-live-2.5-flash",
 )
 
+#: Gemini 3.5 Live Translate (Developer API only).
+TRANSLATE_MODEL = os.environ.get("SNAIL_TRANSLATE_MODEL", "gemini-3.5-live-translate-preview")
+#: BCP-47 target language for the translate agent.
+TRANSLATE_TARGET = os.environ.get("SNAIL_TRANSLATE_TARGET", "hi")  # Hindi
+
 _HOST_INSTRUCTION = (
     "You are a friendly host assistant having a natural spoken conversation. "
     "Keep replies short. When the user asks to start echo mode (for example 'start "
-    "echo'), call the start_echo tool — do not describe it, just call it."
+    "echo'), call the start_echo tool. When the user asks to start translation (for "
+    "example 'start translation' or 'translate'), call the start_translation tool. "
+    "Just call the tool — do not describe it."
 )
 _ECHO_INSTRUCTION = (
     "You are an echo bot. Repeat back, verbatim, exactly what the user says and nothing "
@@ -57,6 +70,11 @@ def build_host_spec() -> AgentSpec:
                 ToolSpec(
                     name="start_echo",
                     description="Switch to echo mode where the user's words are repeated back.",
+                    parameters={"type": "object", "properties": {}},
+                ),
+                ToolSpec(
+                    name="start_translation",
+                    description="Switch to translation mode: translate the user's speech into Hindi.",
                     parameters={"type": "object", "properties": {}},
                 ),
             ),
@@ -84,7 +102,30 @@ def build_echo_spec() -> AgentSpec:
     )
 
 
-SPECS = {HOST_ID: build_host_spec(), ECHO_ID: build_echo_spec()}
+def build_translate_spec() -> AgentSpec:
+    # Translation mode: no tools, no system instruction (model constraint). The
+    # translation target is applied by TranslateGeminiAdapter at connect time.
+    return AgentSpec(
+        id=TRANSLATE_ID,
+        backend=Backend.GEMINI_DEV,  # translate model is Dev-API only
+        setup=SetupParam(
+            model=TRANSLATE_MODEL,
+            response_modality=ResponseModality.AUDIO,
+            input_source=InputSource.RAW,
+        ),
+    )
+
+
+SPECS = {
+    HOST_ID: build_host_spec(),
+    ECHO_ID: build_echo_spec(),
+    TRANSLATE_ID: build_translate_spec(),
+}
+
+#: Which connection pool serves each agent. host + echo share the "main" pool (same
+#: backend + adapter); translate needs the Dev-API "translate" pool (different model +
+#: adapter). Keyed by purpose, not backend, so it holds even if host/echo also run on Dev.
+POOL_KEY = {HOST_ID: "main", ECHO_ID: "main", TRANSLATE_ID: "translate"}
 
 
 def resolve_spec(name: str) -> AgentSpec:

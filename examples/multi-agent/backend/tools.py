@@ -24,6 +24,15 @@ def host_tools() -> ToolRegistry:
             description="Switch to echo mode.",
         )
     )
+    reg.register(
+        Tool(
+            "start_translation",
+            lambda args: {"ok": True},
+            output_schema=_OK_SCHEMA,
+            input_schema=_EMPTY_INPUT,
+            description="Switch to translation mode (translate to Hindi).",
+        )
+    )
     return reg
 
 
