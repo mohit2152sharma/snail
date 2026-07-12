@@ -5,7 +5,7 @@ Legend: ✅ done + tested · 🟡 partial · ⬜ not started · 🔑 needs live 
 
 _Last updated: 2026-07-12._
 
-## Built (key-free, unit-tested — 206 tests green)
+## Built (key-free, unit-tested — 210 tests green)
 
 | Module | What | Docs | TODOs resolved |
 |---|---|---|---|
@@ -40,8 +40,9 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
 
 ## Next (still key-free)
 
-- 🟡 `snail.audio` pipeline — ✅ **cleaner** (`RNNoiseCleaner` + 480-`Rechunker`,
-  `DenoiseBackend` injected), ✅ **resample** (`LazyResampler`: no-op at equal rate, one
+- ✅ `snail.audio` pipeline — ✅ **cleaner** (`RNNoiseCleaner` + 480-`Rechunker`,
+  `DenoiseBackend` injected; ✅ real `RNNoiseDenoiseBackend` — librnnoise via `pyrnnoise`,
+  loaded standalone bypassing its audiolab/pyav-broken package init), ✅ **resample** (`LazyResampler`: no-op at equal rate, one
   stateful converter memoized per distinct `(from,to)`; ✅ **real `SoxrResampleBackend`**
   (libsoxr, guarded import, stateful `ResampleStream` per rate-pair, ~341-sample fixed
   latency @48k→16k)),
@@ -82,5 +83,5 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
 ## How to run
 
 ```
-uv run pytest            # 206 tests, <1s, no network/key
+uv run pytest            # 210 tests, <1s, no network/key
 ```
