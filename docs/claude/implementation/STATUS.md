@@ -5,7 +5,7 @@ Legend: ✅ done + tested · 🟡 partial · ⬜ not started · 🔑 needs live 
 
 _Last updated: 2026-07-12._
 
-## Built (key-free, unit-tested — 200 tests green)
+## Built (key-free, unit-tested — 206 tests green)
 
 | Module | What | Docs | TODOs resolved |
 |---|---|---|---|
@@ -45,8 +45,9 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
   stateful converter memoized per distinct `(from,to)`; ✅ **real `SoxrResampleBackend`**
   (libsoxr, guarded import, stateful `ResampleStream` per rate-pair, ~341-sample fixed
   latency @48k→16k)),
-  ✅ **codec** (`AudioCodec` seam; `PcmCodec` PCM16LE v0 = today's client wire; opus binding
-  later), ✅ **jitter buffer** (`JitterBuffer`: prebuffer→PLAYING→underrun-rearm, boundary-
+  ✅ **codec** (`AudioCodec` seam; `PcmCodec` PCM16LE + ✅ real `OpusCodec` (libopus, guarded,
+  per-stream stateful enc/dec, 480=10ms frame matches interior, duration-agnostic decode) —
+  **client leg only; Gemini always gets PCM16LE**), ✅ **jitter buffer** (`JitterBuffer`: prebuffer→PLAYING→underrun-rearm, boundary-
   stitching drain, `flush` for cut; feeds `OutputGate`). All dep-free (native bindings
   guarded/injected). ✅ **pipeline runner** (`AudioPipeline`): ingress = decode→resample-to-48k
   →480-rechunk→fan-out RAW (+CLEAN iff a clean subscriber) with drop-oldest recovery on
@@ -80,5 +81,5 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
 ## How to run
 
 ```
-uv run pytest            # 200 tests, <1s, no network/key
+uv run pytest            # 206 tests, <1s, no network/key
 ```

@@ -12,6 +12,7 @@ dependencies = [
     "google-genai>=2.11.0",
     "msgspec>=0.21.1",
     "numpy>=2.5.1",
+    "opuslib>=3.0.1",
     "soxr>=1.1.0",
     "uvicorn>=0.51.0",
 ]
