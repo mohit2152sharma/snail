@@ -7,12 +7,22 @@ the ``stop`` tool. Handoff between them is driven by the tool results (see routi
 
 from __future__ import annotations
 
+import os
+
 from snail.connections import AgentSpec
 from snail.vendor import Backend, InputSource, ResponseModality, SetupParam, ToolSpec
 
 HOST_ID = "host"
 ECHO_ID = "echo"
 MODEL = "gemini-2.5-flash-live"
+
+#: Which Gemini backend the example runs on. Vertex (ADC) by default; set
+#: SNAIL_GEMINI_BACKEND=dev for the Developer API (api key).
+BACKEND = (
+    Backend.GEMINI_DEV
+    if os.environ.get("SNAIL_GEMINI_BACKEND", "vertex").lower() == "dev"
+    else Backend.GEMINI_VERTEX
+)
 
 _HOST_INSTRUCTION = (
     "You are a friendly host assistant having a natural spoken conversation. "
@@ -29,7 +39,7 @@ _ECHO_INSTRUCTION = (
 def build_host_spec() -> AgentSpec:
     return AgentSpec(
         id=HOST_ID,
-        backend=Backend.GEMINI_DEV,
+        backend=BACKEND,
         setup=SetupParam(
             model=MODEL,
             response_modality=ResponseModality.AUDIO,
@@ -49,7 +59,7 @@ def build_host_spec() -> AgentSpec:
 def build_echo_spec() -> AgentSpec:
     return AgentSpec(
         id=ECHO_ID,
-        backend=Backend.GEMINI_DEV,
+        backend=BACKEND,
         setup=SetupParam(
             model=MODEL,
             response_modality=ResponseModality.AUDIO,

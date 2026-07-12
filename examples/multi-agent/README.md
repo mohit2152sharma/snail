@@ -14,13 +14,22 @@ binary frames = Opus audio, text frames = JSON control/events.
 
 ## Run
 
-Needs a real Gemini Developer API key (`gemini-2.5-flash-live`).
+Runs on `gemini-2.5-flash-live`. Defaults to the **Vertex AI** backend (ADC auth).
 
-1. **Backend** (from the repo root):
+1. **Backend** (from the repo root).
 
-       GEMINI_API_KEY=your_key PYTHONPATH=examples/multi-agent \
-         python -m backend.app
+   **Vertex AI (default):** authenticate once with ADC, then run:
+
+       gcloud auth application-default login          # one-time, in your own terminal
+       GOOGLE_CLOUD_PROJECT=your-project \
+       GOOGLE_CLOUD_LOCATION=us-central1 \
+       PYTHONPATH=examples/multi-agent python -m backend.app
        # serves ws://localhost:8000/ws
+
+   **Developer API (alternative):**
+
+       SNAIL_GEMINI_BACKEND=dev GEMINI_API_KEY=your_key \
+       PYTHONPATH=examples/multi-agent python -m backend.app
 
 2. **Frontend**:
 

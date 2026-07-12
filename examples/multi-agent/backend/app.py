@@ -20,15 +20,31 @@ from fastapi import FastAPI, WebSocket
 from snail.connections import ConnectionPool, GeminiConnector
 from snail.vendor import Backend, GeminiAdapter
 
+from .agents import BACKEND, MODEL
 from .bridge import MultiAgentBridge
 
 
 def build_pool() -> ConnectionPool:
-    key = os.environ.get("GEMINI_API_KEY")
-    if not key:
-        raise RuntimeError("set GEMINI_API_KEY to run the multi-agent example")
-    adapter = GeminiAdapter()  # host + echo share model + backend → one adapter
-    client = GeminiAdapter.build_client(Backend.GEMINI_DEV, api_key=key)
+    # host + echo share model + backend → one adapter/connector.
+    adapter = GeminiAdapter(backend=BACKEND, model=MODEL)
+    if BACKEND is Backend.GEMINI_VERTEX:
+        # ADC auth (gcloud auth application-default login) + project/location.
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+        location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
+        if not project:
+            raise RuntimeError(
+                "Vertex backend: set GOOGLE_CLOUD_PROJECT (and optionally "
+                "GOOGLE_CLOUD_LOCATION), and authenticate with ADC "
+                "(`gcloud auth application-default login`)."
+            )
+        client = GeminiAdapter.build_client(
+            Backend.GEMINI_VERTEX, project=project, location=location
+        )
+    else:
+        key = os.environ.get("GEMINI_API_KEY")
+        if not key:
+            raise RuntimeError("Dev backend: set GEMINI_API_KEY.")
+        client = GeminiAdapter.build_client(Backend.GEMINI_DEV, api_key=key)
     connector = GeminiConnector(client=client, adapter=adapter)
     return ConnectionPool(connector=connector, max_warm=4)
 
