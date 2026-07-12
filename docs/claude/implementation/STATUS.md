@@ -5,7 +5,7 @@ Legend: ✅ done + tested · 🟡 partial · ⬜ not started · 🔑 needs live 
 
 _Last updated: 2026-07-12._
 
-## Built (key-free, unit-tested — 144 tests green)
+## Built (key-free, unit-tested — 189 tests green)
 
 | Module | What | Docs | TODOs resolved |
 |---|---|---|---|
@@ -57,7 +57,7 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
   `Interrupted`→client FLUSH; `PlayoutClock` buffered-ahead + cut-reset), `create_app`
   (FastAPI: **server up→pool up (prewarm), server down→pool.aclose()**; one WS = one
   session; release-on-disconnect). Resolves 09§E `client-protocol`. ⬜ opus codec on the
-  client leg (v0 = raw PCM16); soxr resample; jitter buffer.
+  client leg (v0 = raw PCM16); auth / reconnect / client-leg backpressure.
 
 ## Blocked on a live Gemini key (Phase 0 spikes — verification, not build)
 
