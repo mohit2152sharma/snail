@@ -12,9 +12,12 @@ from .clean import (
     Rechunker,
     RNNoiseCleaner,
 )
+from .codec import AudioCodec, PcmCodec
 from .fanout import FanoutBus, OverflowPolicy, Subscriber, SubscriberRing
 from .frame import AudioFrame, AudioSource, FrameFlags
+from .jitter import JitterBuffer, JitterState
 from .pool import FramePool, FramePoolExhausted
+from .resample import LazyResampler, ResampleBackend, Resampler
 
 __all__ = [
     "AudioFrame",
@@ -32,4 +35,11 @@ __all__ = [
     "Rechunker",
     "RNNoiseCleaner",
     "FRAME_LEN",
+    "LazyResampler",
+    "ResampleBackend",
+    "Resampler",
+    "AudioCodec",
+    "PcmCodec",
+    "JitterBuffer",
+    "JitterState",
 ]
