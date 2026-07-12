@@ -64,8 +64,9 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
   →codec→client, `Interrupted`→`pipeline.cut()`+client FLUSH; auto attach/grant-token on
   start, detach on teardown. `create_app(session_factory=, pipeline_factory=)` assembles
   the **end-to-end vertical slice** (transport ↔ pipeline ↔ connection, and ↔ session via
-  `on_message`). Resolves 09§E `client-protocol`. ⬜ opus codec on the client leg (v0 = raw
-  PCM16); auth / reconnect / client-leg backpressure.
+  `on_message`). Resolves 09§E `client-protocol`. Client leg supports PCM or opus (codec
+  is a per-connection choice via `pipeline_factory`). ⬜ auth / reconnect / client-leg
+  backpressure.
 
 ## Blocked on a live Gemini key (Phase 0 spikes — verification, not build)
 
