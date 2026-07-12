@@ -2,8 +2,8 @@
 
 const DEFAULTS = {
   wsUrl: "ws://localhost:8000/ws",
-  agents: ["gemini-a", "gemini-b"],
-  title: "Snail Playground",
+  agents: ["host", "echo", "translate"],
+  title: "Multi-Agent",
 };
 
 export function loadConfig() {

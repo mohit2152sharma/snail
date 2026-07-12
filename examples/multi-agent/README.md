@@ -49,7 +49,7 @@ translate on the Dev API.
 
 3. Open **Chrome** at:
 
-       http://localhost:5173/?title=Multi-Agent&ws=ws://localhost:8000/ws&agents=host,echo,translate
+       http://localhost:5173
 
 Grant mic, click **Start**, talk. Timeline shows `active → host`, transcripts, the
 `start_echo` / `start_translation` / `stop` `tool_call` rows, and `active → …` on each
