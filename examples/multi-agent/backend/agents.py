@@ -14,7 +14,6 @@ from snail.vendor import Backend, InputSource, ResponseModality, SetupParam, Too
 
 HOST_ID = "host"
 ECHO_ID = "echo"
-MODEL = "gemini-2.5-flash-live"
 
 #: Which Gemini backend the example runs on. Vertex (ADC) by default; set
 #: SNAIL_GEMINI_BACKEND=dev for the Developer API (api key).
@@ -22,6 +21,15 @@ BACKEND = (
     Backend.GEMINI_DEV
     if os.environ.get("SNAIL_GEMINI_BACKEND", "vertex").lower() == "dev"
     else Backend.GEMINI_VERTEX
+)
+
+#: Live model id per backend. Vertex (us-central1) currently only serves the 2.0
+#: live-preview; the Dev API serves 2.5-flash-live. Override with SNAIL_GEMINI_MODEL.
+MODEL = os.environ.get(
+    "SNAIL_GEMINI_MODEL",
+    "gemini-2.5-flash-live"
+    if BACKEND is Backend.GEMINI_DEV
+    else "gemini-2.0-flash-live-preview-04-09",
 )
 
 _HOST_INSTRUCTION = (
