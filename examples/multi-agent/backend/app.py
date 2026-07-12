@@ -29,6 +29,10 @@ def build_pool() -> ConnectionPool:
     adapter = GeminiAdapter(backend=BACKEND, model=MODEL)
     if BACKEND is Backend.GEMINI_VERTEX:
         # ADC auth (gcloud auth application-default login) + project/location.
+        # google-auth does NOT expand '~' in this path → expand it ourselves.
+        creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        if creds:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.expanduser(creds)
         project = os.environ.get("GOOGLE_CLOUD_PROJECT")
         location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
         if not project:
