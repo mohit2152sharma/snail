@@ -44,13 +44,19 @@ TRANSLATE_MODEL = os.environ.get("SNAIL_TRANSLATE_MODEL", "gemini-3.5-live-trans
 TRANSLATE_TARGET = os.environ.get("SNAIL_TRANSLATE_TARGET", "hi")  # Hindi
 
 _HOST_INSTRUCTION = (
-    "You are a friendly host assistant having a natural spoken conversation. "
-    "Keep replies short. When the user asks to start echo mode (for example 'start "
-    "echo') or translation ('start translation' / 'translate'), say ONE short spoken "
-    "confirmation first (e.g. 'Sure, switching to echo now.' or 'Okay, starting "
-    "translation.') and then, in the SAME turn, call the matching tool (start_echo or "
-    "start_translation). Speak the confirmation before the tool call so the user hears "
-    "it, then call the tool — do not add anything after."
+    "You are the HOST assistant, having a natural spoken conversation. Keep replies "
+    "short and answer the user's questions directly. "
+    "IMPORTANT: You are ALWAYS the host. You must NEVER behave like the other agents: "
+    "do NOT repeat/echo the user's words back, and do NOT translate anything — those "
+    "are other agents' jobs. When control returns to you after echo or translation "
+    "mode, simply resume being the normal conversational host; ignore whatever those "
+    "agents were doing and respond to the user as yourself. "
+    "When the user asks to start echo mode (for example 'start echo') or translation "
+    "('start translation' / 'translate'), say ONE short spoken confirmation first "
+    "(e.g. 'Sure, switching to echo now.' or 'Okay, starting translation.') and then, "
+    "in the SAME turn, call the matching tool (start_echo or start_translation). Speak "
+    "the confirmation before the tool call so the user hears it, then call the tool — "
+    "do not add anything after."
 )
 _ECHO_INSTRUCTION = (
     "You are an echo bot. Repeat back, verbatim, exactly what the user says and nothing "
@@ -65,6 +71,7 @@ def build_host_spec() -> AgentSpec:
         backend=BACKEND,
         setup=SetupParam(
             model=MODEL,
+            voice="Puck",  # distinct voice so host is audibly identifiable
             response_modality=ResponseModality.AUDIO,
             input_source=InputSource.RAW,
             system_instruction=_HOST_INSTRUCTION,
@@ -90,6 +97,7 @@ def build_echo_spec() -> AgentSpec:
         backend=BACKEND,
         setup=SetupParam(
             model=MODEL,
+            voice="Kore",  # distinct voice from host
             response_modality=ResponseModality.AUDIO,
             input_source=InputSource.RAW,
             system_instruction=_ECHO_INSTRUCTION,

@@ -215,6 +215,9 @@ class MultiAgentBridge:
     def _on_promote(self, agent_id: str, needs_flip: bool) -> None:
         # start the promoted agent's receive loop; announce the switch.
         self._active_ev[agent_id].set()
+        # drop any residual audio the previous agent left in the jitter/gate rings so the
+        # newly-active agent starts clean (no tail of the old agent bleeding through).
+        self._pipeline.cut()
         log.info("promote → %s", agent_id)
         asyncio.create_task(self._emit(active_agent_changed(agent_id)))
 
