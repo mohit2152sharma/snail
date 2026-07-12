@@ -1,7 +1,7 @@
 // src/audio/downlink.js — Opus 24k -> decode -> gapless playback.
 import { nextStartTime, advanceCursor } from "./jitter.js";
 
-const SAMPLE_RATE = 24000;
+const SAMPLE_RATE = 48000; // backend OpusCodec emits 48k (opus-native); match it
 const MIN_LEAD_SEC = 0.05;
 
 export function createDownlink() {
