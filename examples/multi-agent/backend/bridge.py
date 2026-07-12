@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+
+log = logging.getLogger("multiagent")
 
 from snail.audio import (
     FRAME_LEN,
@@ -65,6 +68,14 @@ class MultiAgentBridge:
         self._tasks: list[asyncio.Task] = []
         self._muted = False
         self._closing = False
+        self._mic_bytes = 0
+        self._mic_logged = 0
+        self._out_bytes = 0
+        # per-agent "you hold the token" gate: only the active agent pumps receive.
+        self._active_ev: dict[str, asyncio.Event] = {
+            HOST_ID: asyncio.Event(),
+            ECHO_ID: asyncio.Event(),
+        }
 
         # audio plane — bus + gate are shared with the Router below.
         frames = FramePool(capacity=256, slab_samples=FRAME_LEN)
@@ -103,21 +114,48 @@ class MultiAgentBridge:
             await self._emit(err_event("setup_failed", str(exc)))
             await self._release_conns()
             return
+        named: dict[asyncio.Task, str] = {}
         for cid in _AGENT_IDS:
-            conn = self._conns[cid]
-            self._tasks.append(
-                asyncio.create_task(
-                    conn.run(self._make_on_msg(cid), on_audio=self._make_on_audio(cid))
-                )
-            )
-        self._tasks.append(asyncio.create_task(self._pump_client()))
+            t = asyncio.create_task(self._agent_loop(cid))
+            named[t] = f"run[{cid}]"
+            self._tasks.append(t)
+        client = asyncio.create_task(self._pump_client())
+        named[client] = "client_in"
+        self._tasks.append(client)
         try:
-            await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(
+                self._tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            for t in done:
+                exc = t.exception()
+                if exc is not None:
+                    log.error("task %s crashed: %r", named.get(t, "?"), exc, exc_info=exc)
+                else:
+                    log.info("task %s finished cleanly → tearing down", named.get(t, "?"))
         finally:
             await self._teardown()
 
+    async def _agent_loop(self, cid: str) -> None:
+        """Drive one connection's receive loop across turns — only while active.
+
+        Gemini Live's ``session.receive()`` ends after each turn (docs pattern:
+        ``while: async for``), and ``connection.run`` is a single ``async for``. So we
+        re-enter it per turn, but *only* while this agent holds the token: an idle
+        agent's ``receive()`` returns immediately, which would hot-spin, so it parks on
+        its activation event until the Router promotes it.
+        """
+        conn = self._conns[cid]
+        on_msg = self._make_on_msg(cid)
+        on_audio = self._make_on_audio(cid)
+        ev = self._active_ev[cid]
+        while not self._closing:
+            if not ev.is_set():
+                await ev.wait()
+                continue
+            await conn.run(on_msg, on_audio=on_audio)
+
     async def _setup(self) -> None:
-        log = EventLog()
+        event_log = EventLog()
         for cid in _AGENT_IDS:
             conn = await self._pool.acquire(SPECS[cid])
             conn.activate()
@@ -131,13 +169,15 @@ class MultiAgentBridge:
             )
             self._sessions[cid] = Session(
                 adapter=conn.adapter,
-                log=log,
+                log=event_log,
                 tools=self._tools[cid],
                 registry=self._registry,
                 router=self._router,
                 send=self._make_send(conn),
             )
         self._router.set_active(HOST_ID)  # host holds the token + hears user first
+        self._active_ev[HOST_ID].set()  # host pumps receive from the start
+        log.info("setup complete: agents=%s active=%s", list(self._conns), HOST_ID)
         await self._emit(active_agent_changed(HOST_ID))
 
     async def _teardown(self) -> None:
@@ -156,12 +196,17 @@ class MultiAgentBridge:
     # --- router hooks -----------------------------------------------------
 
     def _on_promote(self, agent_id: str, needs_flip: bool) -> None:
-        # fire-and-forget: hooks are sync, emit is async.
+        # start the promoted agent's receive loop; announce the switch.
+        self._active_ev[agent_id].set()
+        log.info("promote → %s", agent_id)
         asyncio.create_task(self._emit(active_agent_changed(agent_id)))
 
     def _on_demote(self, agent_id: str) -> None:
-        # silence the idle agent: drop its user-audio subscription (re-subbed on promote).
+        # park the ex-active's receive loop + drop its user-audio subscription
+        # (both re-established on promote back).
+        self._active_ev[agent_id].clear()
         self._pipeline.detach_consumer(agent_id)
+        log.info("demote → %s", agent_id)
 
     # --- client → agents --------------------------------------------------
 
@@ -188,8 +233,14 @@ class MultiAgentBridge:
             if conn is None:
                 continue
             rate = conn.adapter.capabilities.input_sample_rate
+            n = 0
             for ch in chunks:
                 await conn.send_realtime(MediaChunk.audio(ch, sample_rate=rate))
+                n += len(ch)
+            self._mic_bytes += n
+            if self._mic_bytes - self._mic_logged > 96000:  # ~1s @16k mono
+                log.info("mic→%s: %d bytes total", cid, self._mic_bytes)
+                self._mic_logged = self._mic_bytes
 
     async def _handle_control(self, text: str) -> None:
         try:
@@ -237,6 +288,7 @@ class MultiAgentBridge:
                     self._pipeline.cut()
                 j = to_client_json(ev, agent_id=cid)
                 if j is not None:
+                    log.info("event %s from %s", j["type"], cid)
                     await self._emit(j)
             await session.on_vendor_raw(raw)
 
@@ -254,7 +306,9 @@ class MultiAgentBridge:
                 frame = self._pipeline.playout(cid)
                 if frame is None:
                     break
+                self._out_bytes += len(frame)
                 await self._socket.send_bytes(frame)
+            log.debug("agent %s audio out, total=%d opus bytes", cid, self._out_bytes)
 
         return on_audio
 

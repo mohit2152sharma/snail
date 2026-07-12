@@ -71,4 +71,8 @@ def create_app() -> FastAPI:
 
 
 if __name__ == "__main__":
+    import logging
+
+    logging.basicConfig(level=logging.INFO, force=True)
+    logging.getLogger("multiagent").setLevel(logging.INFO)
     uvicorn.run(create_app(), host="0.0.0.0", port=8000)
