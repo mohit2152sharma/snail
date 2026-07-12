@@ -75,13 +75,39 @@ client ⇄ SNAIL    → WE control: binary frames + opus.  ✓
 SNAIL  ⇄ vendor   → base64-in-JSON forced by vendor. int16 → base64 at edge.
 ```
 
-> **TODO(client-protocol — see 09§E):** the client leg is specified as "binary WS +
-> opus" only — **no control channel**. Real barge-in (CUT_NOW) needs a client-bound
-> `flush/clear` frame to drop already-buffered playout audio, plus playout-position
-> reporting back (required for OpenAI `conversation.item.truncate` and for honest
-> "what the user actually heard" logging — see 01 TODO(log-truncation-fidelity)).
-> Token revoke only stops **server-side** send. Write the client wire protocol:
-> framing, control channel, playout clock.
+### Client wire protocol (RESOLVED — `snail.transport`)
+
+One WebSocket per session (FastAPI/uvicorn), two frame kinds:
+
+```
+binary frame → MEDIA.    Raw audio payload. v0 = PCM16 little-endian mono at the
+                         session's negotiated rate. No header (audio is the only
+                         binary type; the bytes ARE the payload). opus can layer in
+                         later behind the same seam. Symmetric: client→server = mic,
+                         server→client = agent audio.
+text frame   → CONTROL.  JSON `Control {type, ...}`. The channel that makes CUT_NOW
+                         real — token revoke stops SERVER send; only a client-bound
+                         FLUSH drops already-buffered playout.
+```
+
+Control types (per direction):
+
+```
+server → client:  READY (session accepted, start)   FLUSH (barge-in: drop playout NOW)
+                  TRANSCRIPT (opt: text/role/final)  BYE (server closing)
+client → server:  PLAYOUT (samples actually played)  END (mic done → audio_stream_end)
+```
+
+`PlayoutClock` tracks `sent − played = buffered_ahead`; on FLUSH it resets `sent` down
+to the last reported `played` → honest "what the user actually heard" (feeds OpenAI
+`conversation.item.truncate` and 01 TODO(log-truncation-fidelity)).
+
+**Default behaviour:** whatever the multi-agent generates is passed to the client
+(`ClientBridge`). The socket is an injected `ClientSocket` seam, so the bridge is
+testable without a server. `create_app` owns pool lifecycle: **server up → pool up
+(prewarm); server down → `pool.aclose()`** (closes every live connection). One WS = one
+user-session; the socket is released (closed, not reused — sessions are
+conversation-bound) on disconnect.
 
 Verified vendor rates: **Gemini in=16kHz / out=24kHz**; **OpenAI 24kHz both**.
 (ai.google.dev/api/live; get-started-websocket.)

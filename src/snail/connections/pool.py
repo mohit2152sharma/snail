@@ -111,6 +111,18 @@ class ConnectionPool:
         conn.park()
         self._standby[conn.spec.pool_key].append(conn)
 
+    async def release(self, conn: AgentConnection) -> None:
+        """Close and drop a connection the pool owns (end of a user-session).
+
+        Realtime sessions are conversation-bound — no cross-session reuse (docs 02) — so
+        a finished client-session's socket is closed, not returned to a bucket.
+        """
+        for bucket in self._standby.values():
+            if conn in bucket:
+                bucket.remove(conn)
+                break
+        await self._close_conn(conn)
+
     # --- recycle (mechanism; scheduling is a loop concern) ---------------
 
     def due_for_recycle(self, *, margin: float) -> list[AgentConnection]:

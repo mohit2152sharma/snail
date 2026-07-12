@@ -11,3 +11,6 @@ wheels/
 
 # Editor / extension artifacts
 *.vsix
+
+# Tooling caches
+.codegraph/

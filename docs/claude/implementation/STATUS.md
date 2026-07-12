@@ -40,10 +40,17 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
 
 ## Next (still key-free)
 
-- ⬜ `snail.audio` pipeline — resample (soxr, lazy per-rate), RNNoise cleaner (per-consumer),
-  opus codec, jitter buffer feeding the OutputGate ring (per-ring backpressure, 09§E
-  `backpressure-per-ring`).
-- ⬜ `snail.transport` — client WS + control channel + playout clock (09§E `client-protocol`).
+- 🟡 `snail.audio` pipeline — ✅ **cleaner** (`AudioCleaner`/`NullCleaner`/`RNNoiseCleaner`
+  + preallocated 480-sample `Rechunker`; `DenoiseBackend` injected → dep-free, native
+  `librnnoise` binding wired later). ⬜ resample (soxr, lazy per-rate), opus codec, jitter
+  buffer feeding the OutputGate ring (per-ring backpressure, 09§E). **VAD deferred.**
+- 🟡 `snail.transport` — ✅ **wire protocol** (binary=media PCM16LE, text=JSON `Control`:
+  READY/FLUSH/TRANSCRIPT/BYE/PLAYOUT/END), `ClientSocket` seam (FastAPI `WebSocket` fits;
+  fake for tests), `ClientBridge` (default = agent output→client; mic→`send_realtime`;
+  `Interrupted`→client FLUSH; `PlayoutClock` buffered-ahead + cut-reset), `create_app`
+  (FastAPI: **server up→pool up (prewarm), server down→pool.aclose()**; one WS = one
+  session; release-on-disconnect). Resolves 09§E `client-protocol`. ⬜ opus codec on the
+  client leg (v0 = raw PCM16); soxr resample; jitter buffer.
 
 ## Blocked on a live Gemini key (Phase 0 spikes — verification, not build)
 
@@ -59,5 +66,5 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
 ## How to run
 
 ```
-uv run pytest            # 144 tests, <1s, no network/key
+uv run pytest            # 166 tests, <1s, no network/key
 ```

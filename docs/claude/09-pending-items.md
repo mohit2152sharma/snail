@@ -121,13 +121,13 @@ named doc.
   names interruption latency as a thing Snail "can genuinely beat competitors on";
   11 defers local VAD → v1 ships **without** the differentiator. Either promote
   local VAD into v1 or soften 00's claim. Anchors: 00, 11 (🟡 local VAD).
-- 🔴 **TODO(client-protocol): no client control channel → CUT_NOW can't actually
-  cut.** Token revoke + ring flush stop **server-side** send; the client still has
-  buffered playout audio. Real barge-in needs a client-bound `flush/clear` control
-  frame + playout-position reporting (also needed for OpenAI
-  `conversation.item.truncate` and for honest "what the user heard" logging). No
-  doc specifies the client wire protocol beyond "binary WS + opus." Write it:
-  framing, control channel, playout clock. Anchor: 11 (client leg).
+- ✅ **RESOLVED(client-protocol): `snail.transport` defines the client wire protocol.**
+  Binary=media (PCM16LE v0), text=JSON `Control` control channel with a client-bound
+  `FLUSH` (real CUT_NOW) + `PLAYOUT` position reporting → `PlayoutClock` buffered-ahead
+  accounting (feeds OpenAI `item.truncate` + honest "what the user heard"). `create_app`
+  (FastAPI/uvicorn) owns pool lifecycle: server up→pool up, server down→`pool.aclose()`.
+  Spec in 11 §Client wire protocol. Still open: opus codec on the client leg (v0=raw PCM),
+  jitter buffer, soxr resample.
 
 ### Medium
 
