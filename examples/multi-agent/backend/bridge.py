@@ -47,7 +47,7 @@ from snail.session import Session
 from snail.vendor import Interrupted, MediaChunk, ResponseModality
 
 from .agents import ECHO_ID, HOST_ID, SPECS
-from .events import active_agent_changed, to_client_json
+from .events import active_agent_changed, error as err_event, to_client_json
 from .routing import build_policy
 from .tools import echo_tools, host_tools
 
@@ -97,7 +97,12 @@ class MultiAgentBridge:
 
     async def run(self) -> None:
         await self._socket.accept()
-        await self._setup()
+        try:
+            await self._setup()
+        except Exception as exc:  # noqa: BLE001 - surface setup failure to the client
+            await self._emit(err_event("setup_failed", str(exc)))
+            await self._release_conns()
+            return
         for cid in _AGENT_IDS:
             conn = self._conns[cid]
             self._tasks.append(
@@ -141,8 +146,12 @@ class MultiAgentBridge:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         for session in self._sessions.values():
             await session.aclose()
+        await self._release_conns()
+
+    async def _release_conns(self) -> None:
         for conn in self._conns.values():
             await self._pool.release(conn)
+        self._conns.clear()
 
     # --- router hooks -----------------------------------------------------
 
