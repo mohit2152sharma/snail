@@ -16,6 +16,7 @@ from .codec import AudioCodec, PcmCodec
 from .fanout import FanoutBus, OverflowPolicy, Subscriber, SubscriberRing
 from .frame import AudioFrame, AudioSource, FrameFlags
 from .jitter import JitterBuffer, JitterState
+from .pipeline import INTERIOR_RATE, AudioPipeline
 from .pool import FramePool, FramePoolExhausted
 from .resample import LazyResampler, ResampleBackend, Resampler
 
@@ -42,4 +43,6 @@ __all__ = [
     "PcmCodec",
     "JitterBuffer",
     "JitterState",
+    "AudioPipeline",
+    "INTERIOR_RATE",
 ]

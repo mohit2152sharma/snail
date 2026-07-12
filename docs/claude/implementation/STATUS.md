@@ -46,7 +46,11 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
   ✅ **codec** (`AudioCodec` seam; `PcmCodec` PCM16LE v0 = today's client wire; opus binding
   later), ✅ **jitter buffer** (`JitterBuffer`: prebuffer→PLAYING→underrun-rearm, boundary-
   stitching drain, `flush` for cut; feeds `OutputGate`). All dep-free (native bindings
-  guarded/injected). **VAD deferred.**
+  guarded/injected). ✅ **pipeline runner** (`AudioPipeline`): ingress = decode→resample-to-48k
+  →480-rechunk→fan-out RAW (+CLEAN iff a clean subscriber) with drop-oldest recovery on
+  exhaustion, `drain` = per-subscriber ring-pop→lazy resample-to-vendor-rate→bytes+release;
+  egress = decode/upsample→jitter→OutputGate token→codec→client bytes, `cut` flushes both.
+  **VAD deferred.**
 - 🟡 `snail.transport` — ✅ **wire protocol** (binary=media PCM16LE, text=JSON `Control`:
   READY/FLUSH/TRANSCRIPT/BYE/PLAYOUT/END), `ClientSocket` seam (FastAPI `WebSocket` fits;
   fake for tests), `ClientBridge` (default = agent output→client; mic→`send_realtime`;
@@ -69,5 +73,5 @@ resample** (docs 11/07). Fan-out bus already carries `source` + `target_rate` pe
 ## How to run
 
 ```
-uv run pytest            # 180 tests, <1s, no network/key
+uv run pytest            # 189 tests, <1s, no network/key
 ```
