@@ -19,6 +19,7 @@ from .jitter import JitterBuffer, JitterState
 from .pipeline import INTERIOR_RATE, AudioPipeline
 from .pool import FramePool, FramePoolExhausted
 from .resample import LazyResampler, ResampleBackend, Resampler
+from .vad import EnergyVad, VadEvent, VadState
 
 __all__ = [
     "AudioFrame",
@@ -45,4 +46,7 @@ __all__ = [
     "JitterState",
     "AudioPipeline",
     "INTERIOR_RATE",
+    "EnergyVad",
+    "VadEvent",
+    "VadState",
 ]
