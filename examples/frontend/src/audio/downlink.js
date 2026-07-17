@@ -2,7 +2,9 @@
 import { nextStartTime, advanceCursor } from "./jitter.js";
 
 const SAMPLE_RATE = 48000; // backend OpusCodec emits 48k (opus-native); match it
-const MIN_LEAD_SEC = 0.05;
+// Scheduling lead before the first decoded frame plays. 25ms trades a little
+// underrun headroom for ~25ms less time-to-first-sound (part of per-turn TTFB).
+const MIN_LEAD_SEC = 0.025;
 
 export function createDownlink() {
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });

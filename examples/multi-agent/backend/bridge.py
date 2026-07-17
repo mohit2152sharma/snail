@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 log = logging.getLogger("multiagent")
 
@@ -48,7 +49,13 @@ from snail.router import (
 )
 from snail.session import Session
 from snail.tools import ToolRegistry
-from snail.vendor import Interrupted, MediaChunk, ResponseModality
+from snail.vendor import (
+    Interrupted,
+    MediaChunk,
+    ResponseModality,
+    TurnComplete,
+    UserTranscript,
+)
 
 from .agents import ECHO_ID, HOST_ID, POOL_KEY, REANCHOR, SPECS, TRANSLATE_ID
 from .events import active_agent_changed, error as err_event, to_client_json
@@ -84,6 +91,12 @@ class MultiAgentBridge:
         self._mic_bytes = 0
         self._mic_logged = 0
         self._out_bytes = 0
+        # --- per-turn TTFB instrumentation -------------------------------------
+        # Measures the CONTROLLABLE sub-window: turn-end (Gemini finalized the user's
+        # turn, i.e. the 800ms VAD silence has elapsed) → first agent audio byte out.
+        # The 800ms silence itself lives inside Gemini's VAD and is not observable here.
+        self._ttfb_t0: float | None = None  # monotonic ts of user-turn finalization
+        self._ttfb_pending = False  # armed until this turn's first audio byte fires
         # per-agent "you hold the token" gate: only the active agent pumps receive.
         self._active_ev: dict[str, asyncio.Event] = {
             cid: asyncio.Event() for cid in self._agent_ids
@@ -98,7 +111,10 @@ class MultiAgentBridge:
             bus=self._bus,
             resampler=LazyResampler(SoxrResampleBackend()),
             gate=self._gate,
-            jitter=JitterBuffer(),
+            # egress prebuffer: 1 frame (10ms) instead of the default 3 (30ms) — shaves
+            # ~20ms off first-byte-out at a small underrun-smoothing cost (Gemini bursts
+            # are large, so playout re-arms immediately). Part of the per-turn TTFB budget.
+            jitter=JitterBuffer(prefill_frames=1),
             codec=OpusCodec(),  # client leg: opus ⇄ 48k int16 mono
             client_rate=48000,  # opus is native 48k → no resample around the codec
         )
@@ -319,6 +335,14 @@ class MultiAgentBridge:
             for ev in conn.adapter.parse_event(raw):
                 if isinstance(ev, Interrupted):
                     self._pipeline.cut()
+                # TTFB: arm the timer when the active agent's user turn is finalized
+                # (VAD silence elapsed → model about to respond); disarm at turn end.
+                if self._router.active_id == cid:
+                    if isinstance(ev, UserTranscript) and ev.is_final:
+                        self._ttfb_t0 = time.monotonic()
+                        self._ttfb_pending = True
+                    elif isinstance(ev, TurnComplete):
+                        self._ttfb_pending = False
                 j = to_client_json(ev, agent_id=cid)
                 if j is not None:
                     txt = j.get("text")
@@ -338,6 +362,11 @@ class MultiAgentBridge:
         async def on_audio(pcm: bytes) -> None:
             if self._router.active_id != cid:
                 return  # only the token holder's audio reaches the client
+            # TTFB: first audio byte of this turn → log turn-end→first-byte latency.
+            if self._ttfb_pending and self._ttfb_t0 is not None:
+                self._ttfb_pending = False
+                ttfb_ms = (time.monotonic() - self._ttfb_t0) * 1000.0
+                log.info("TTFB %s turn-end→first-byte: %.0f ms", cid, ttfb_ms)
             self._pipeline.on_vendor_audio(pcm, vendor_rate=rate)
             while True:
                 frame = self._pipeline.playout(cid)
