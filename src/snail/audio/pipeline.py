@@ -96,21 +96,26 @@ class AudioPipeline:
 
     # --- ingress: client → interior → fan-out ----------------------------
 
-    def on_client_audio(self, data: bytes) -> None:
+    def on_client_audio(self, data: bytes) -> list[np.ndarray]:
         """Decode one client media frame and publish it to the fan-out bus.
 
         RAW frames always publish; CLEAN frames publish only when a subscriber wants
         them (the cleaner is skipped entirely otherwise — the per-consumer CPU lever).
+
+        Returns the RAW 48k frames published this call so the caller (bridge) can feed
+        them to its endpointing VAD without re-decoding (empty if no full frame completed).
         """
         samples = self._codec.decode(data)
         at48 = self._resampler.resample(
             samples, from_rate=self._client_rate, to_rate=INTERIOR_RATE
         )
-        for frame480 in self._rechunk_raw(at48):
+        frames = self._rechunk_raw(at48)
+        for frame480 in frames:
             self._publish(frame480, AudioSource.USER_RAW)
         if self._cleaner is not None and self._wants_clean():
             for cleaned in self._cleaner.process(at48):
                 self._publish(cleaned, AudioSource.USER_CLEAN)
+        return frames
 
     def drain(self) -> dict[str, list[bytes]]:
         """Pull every subscriber's ring → vendor-ready PCM bytes, per subscriber id.
