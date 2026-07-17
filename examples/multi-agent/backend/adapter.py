@@ -55,3 +55,21 @@ class VadGeminiAdapter(GeminiAdapter):
             )
         )
         return cfg
+
+
+class ManualVadGeminiAdapter(GeminiAdapter):
+    """GeminiAdapter with automatic VAD OFF — the bridge owns endpointing.
+
+    In manual-activity mode the model does not detect turn boundaries itself; the caller
+    must bracket the user's audio with ``activity_start`` / ``activity_end`` markers. The
+    ``MultiAgentBridge``'s :class:`~snail.audio.EnergyVad` sends those, so end-of-speech
+    is declared after a short hangover instead of Gemini's flat 800ms silence wait — the
+    dominant per-turn TTFB term.
+    """
+
+    def build_setup(self, setup, *, resumption_handle: str | None = None):
+        cfg = super().build_setup(setup, resumption_handle=resumption_handle)
+        cfg.realtime_input_config = types.RealtimeInputConfig(
+            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
+        )
+        return cfg
