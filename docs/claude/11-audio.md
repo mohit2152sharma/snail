@@ -247,6 +247,19 @@ Three buffer types, two gates.
                     speaker sample-clock; OutputGate ring is the paced drain.
 ```
 
+### Jitter buffer prefill is adaptive, not a fixed tax (per-turn TTFB lever)
+
+Every re-arm of the jitter buffer (turn start, post-underrun, post-flush) pays its
+prebuffer as pure added latency on the *first* byte of that turn — a static
+`prefill_frames` constant taxes every single turn even on a clean connection. Instead
+`JitterBuffer` runs an AIMD control loop over the target (docs: `snail.audio.jitter`):
+first arm stays conservative (`prefill_frames`, no jitter evidence yet); every underrun
+grows the target by one frame (capped at that ceiling); a streak of clean pops
+(`decay_after`) shrinks it back down (floored at `min_prefill_frames`, default 1 frame =
+10ms). A session's later turns re-arm at the learned-down floor on a healthy link, and
+grow back automatically the moment the link actually gets jittery — the fixed 30ms tax
+becomes the exception, not the default.
+
 ### Gates (the two control points)
 
 ```

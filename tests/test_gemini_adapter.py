@@ -6,6 +6,7 @@ from google.genai import types
 
 from snail.context import Item, Role
 from snail.vendor import (
+    MIN_SILENCE_DURATION_MS,
     AgentTranscript,
     Backend,
     GeminiAdapter,
@@ -20,10 +21,11 @@ from snail.vendor import (
     ToolCallRequest,
     ToolSpec,
     TurnComplete,
+    TurnDetectionParam,
     UserTranscript,
     VendorAdapter,
 )
-from snail.vendor.gemini import _parse_duration_ms
+from snail.vendor.gemini import _parse_duration_ms, clamp_silence_ms
 
 
 def _dev() -> GeminiAdapter:
@@ -65,6 +67,35 @@ def test_build_setup_voice_and_system_instruction() -> None:
     )
     assert cfg.system_instruction == "be nice"
     assert cfg.speech_config.voice_config.prebuilt_voice_config.voice_name == "Puck"
+
+
+def test_build_setup_defaults_to_floored_server_vad() -> None:
+    """Per-turn TTFB: server-VAD is on by default, at the 500ms floor — no example hack."""
+    cfg = _dev().build_setup(SetupParam(model="m"))
+    vad = cfg.realtime_input_config.automatic_activity_detection
+    assert vad.disabled is False
+    assert vad.silence_duration_ms == MIN_SILENCE_DURATION_MS == 500
+
+
+def test_build_setup_honors_a_higher_configured_silence() -> None:
+    cfg = _dev().build_setup(
+        SetupParam(model="m", turn_detection=TurnDetectionParam(silence_duration_ms=900))
+    )
+    assert cfg.realtime_input_config.automatic_activity_detection.silence_duration_ms == 900
+
+
+def test_build_setup_clamps_a_too_low_configured_silence() -> None:
+    """Never below the floor, whatever a caller (mis)configures — a correctness floor."""
+    cfg = _dev().build_setup(
+        SetupParam(model="m", turn_detection=TurnDetectionParam(silence_duration_ms=100))
+    )
+    assert cfg.realtime_input_config.automatic_activity_detection.silence_duration_ms == 500
+
+
+def test_clamp_silence_ms_helper() -> None:
+    assert clamp_silence_ms(100) == 500
+    assert clamp_silence_ms(500) == 500
+    assert clamp_silence_ms(900) == 900
 
 
 def test_tool_behavior_native_on_dev_only() -> None:

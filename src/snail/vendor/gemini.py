@@ -38,12 +38,42 @@ from .events import (
     UserTranscript,
 )
 from .media import MediaChunk, MediaKind, RealtimeControl
-from .params import ResponseModality, SetupParam
+from .params import MIN_SILENCE_DURATION_MS, ResponseModality, SetupParam, TurnDetectionParam
 
 _MODALITY = {
     ResponseModality.AUDIO: types.Modality.AUDIO,
     ResponseModality.TEXT: types.Modality.TEXT,
 }
+
+
+def clamp_silence_ms(ms: int) -> int:
+    """Floor a configured end-of-speech silence duration at ``MIN_SILENCE_DURATION_MS``.
+
+    A too-aggressive config degrades to the safe floor rather than clipping real
+    speech (docs 11 TTFB) — never emit a lower value on the wire, whatever was asked.
+    """
+    return max(MIN_SILENCE_DURATION_MS, ms)
+
+
+def realtime_input_config(td: TurnDetectionParam) -> types.RealtimeInputConfig:
+    """Build Gemini's VAD config from the neutral :class:`TurnDetectionParam`."""
+    return types.RealtimeInputConfig(
+        automatic_activity_detection=types.AutomaticActivityDetection(
+            disabled=False,
+            start_of_speech_sensitivity=(
+                types.StartSensitivity.START_SENSITIVITY_HIGH
+                if td.start_sensitivity_high
+                else types.StartSensitivity.START_SENSITIVITY_LOW
+            ),
+            end_of_speech_sensitivity=(
+                types.EndSensitivity.END_SENSITIVITY_HIGH
+                if td.end_sensitivity_high
+                else types.EndSensitivity.END_SENSITIVITY_LOW
+            ),
+            prefix_padding_ms=td.prefix_padding_ms,
+            silence_duration_ms=clamp_silence_ms(td.silence_duration_ms),
+        )
+    )
 
 
 def _parse_duration_ms(s: str | None) -> int | None:
@@ -143,6 +173,9 @@ class GeminiAdapter:
             output_audio_transcription=types.AudioTranscriptionConfig(),
             # enable resumption; pass a handle to resume (docs 02).
             session_resumption=types.SessionResumptionConfig(handle=resumption_handle),
+            # automatic server-VAD, end-of-speech floored at MIN_SILENCE_DURATION_MS —
+            # this is where the vendor-uncontrollable slice of per-turn TTFB is tuned.
+            realtime_input_config=realtime_input_config(setup.turn_detection),
         )
         if setup.system_instruction:
             cfg.system_instruction = setup.system_instruction

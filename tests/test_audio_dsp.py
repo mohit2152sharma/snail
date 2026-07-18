@@ -165,3 +165,72 @@ def test_flush_clears_and_rearms() -> None:
     jb.flush()
     assert jb.buffered == 0 and jb.state is JitterState.PREBUFFERING
     assert jb.pop() is None
+
+
+# --- adaptive (AIMD) target ------------------------------------------------
+
+
+def test_target_starts_at_ceiling_no_evidence_yet() -> None:
+    jb = JitterBuffer(frame_size=100, prefill_frames=3, min_prefill_frames=1)
+    assert jb.target_frames == 3
+    jb.push(_pcm(250))  # < 300 ceiling → still prebuffering
+    assert jb.state is JitterState.PREBUFFERING
+
+
+def test_underrun_grows_target_capped_at_ceiling() -> None:
+    jb = JitterBuffer(frame_size=100, prefill_frames=2, min_prefill_frames=1)
+    jb.push(_pcm(220))  # arms at 200 (ceiling=2)
+    jb.pop()  # 100 out, 120 left
+    jb.pop()  # 100 out, 20 left
+    assert jb.target_frames == 2  # unchanged: no underrun yet
+    jb.pop()  # 20 < 100 → underrun → grows target
+    assert jb.state is JitterState.PREBUFFERING
+    assert jb.target_frames == 2  # already at the ceiling, can't grow further
+
+    # a ceiling of 1 still caps growth even after a real underrun
+    jb2 = JitterBuffer(frame_size=100, prefill_frames=1, min_prefill_frames=1)
+    jb2.push(_pcm(150))  # arms at 100 (ceiling=1)
+    assert jb2.pop() is not None  # 100 out, 50 left
+    assert jb2.pop() is None  # 50 < 100 → underrun → tries to grow, capped at 1
+    assert jb2.target_frames == 1
+
+
+def test_target_decays_after_stability_streak() -> None:
+    jb = JitterBuffer(
+        frame_size=100, prefill_frames=3, min_prefill_frames=1, decay_after=4
+    )
+    assert jb.target_frames == 3
+    jb.push(_pcm(300))  # arms at the ceiling (300)
+    for _ in range(4):  # 4 clean pops == decay_after → target drops by one frame
+        assert jb.pop() is not None
+        jb.push(_pcm(100))  # keep it fed so pops stay clean
+    assert jb.target_frames == 2
+
+
+def test_target_never_decays_below_floor() -> None:
+    jb = JitterBuffer(
+        frame_size=100, prefill_frames=2, min_prefill_frames=1, decay_after=1
+    )
+    jb.push(_pcm(200))  # arms at the ceiling (200)
+    for _ in range(10):
+        assert jb.pop() is not None
+        jb.push(_pcm(100))
+    assert jb.target_frames == 1  # floored, never lower
+
+
+def test_second_arm_uses_the_decayed_target() -> None:
+    """The real per-turn TTFB payoff: turn 2 re-arms faster than turn 1 on a clean link."""
+    jb = JitterBuffer(
+        frame_size=100, prefill_frames=3, min_prefill_frames=1, decay_after=2
+    )
+    jb.push(_pcm(300))  # turn 1: arms at the conservative ceiling (300)
+    for _ in range(2):  # a clean streak decays the target — no underrun anywhere
+        assert jb.pop() is not None
+        jb.push(_pcm(100))
+    assert jb.target_frames == 2  # decayed once, from evidence, not guesswork
+    jb.flush()  # turn 1 ends cleanly (barge-in/turn-complete) — not an underrun
+    assert jb.target_frames == 2  # the decayed target survives the flush
+    jb.push(_pcm(199))  # turn 2: would have needed 300 before decay; 200 arms it now
+    assert jb.state is JitterState.PREBUFFERING
+    jb.push(_pcm(1))
+    assert jb.state is JitterState.PLAYING  # armed at the decayed 200, not the original 300

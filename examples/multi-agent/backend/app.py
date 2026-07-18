@@ -19,9 +19,9 @@ import uvicorn
 from fastapi import FastAPI, WebSocket
 
 from snail.connections import ConnectionPool, GeminiConnector
-from snail.vendor import Backend
+from snail.vendor import Backend, GeminiAdapter
 
-from .adapter import TranslateGeminiAdapter, VadGeminiAdapter
+from .adapter import TranslateGeminiAdapter
 from .agents import (
     BACKEND,
     ECHO_ID,
@@ -50,13 +50,13 @@ def _main_client():
                 "Vertex backend: set GOOGLE_CLOUD_PROJECT and authenticate with ADC "
                 "(`gcloud auth application-default login`)."
             )
-        return VadGeminiAdapter.build_client(
+        return GeminiAdapter.build_client(
             Backend.GEMINI_VERTEX, project=project, location=location
         )
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("Dev backend: set GEMINI_API_KEY.")
-    return VadGeminiAdapter.build_client(Backend.GEMINI_DEV, api_key=key)
+    return GeminiAdapter.build_client(Backend.GEMINI_DEV, api_key=key)
 
 
 def build_runtime() -> tuple[dict, list[str]]:
@@ -67,7 +67,7 @@ def build_runtime() -> tuple[dict, list[str]]:
     host + echo.
     """
     pools: dict = {}
-    main_adapter = VadGeminiAdapter(backend=BACKEND, model=MODEL)  # server-side VAD
+    main_adapter = GeminiAdapter(backend=BACKEND, model=MODEL)  # server-side VAD (floored)
     pools["main"] = ConnectionPool(
         connector=GeminiConnector(client=_main_client(), adapter=main_adapter),
         max_warm=4,

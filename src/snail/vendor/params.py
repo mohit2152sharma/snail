@@ -33,6 +33,30 @@ class InputSource(enum.Enum):
     RAW = "raw"
 
 
+#: Floor for vendor server-VAD end-of-speech silence, in ms (docs 11 TTFB). This is the
+#: dominant, framework-uncontrollable slice of per-turn latency: the vendor waits this
+#: long after the user stops talking before deciding the turn ended. Below this floor,
+#: real speech risks a false end-of-turn (a trailing word clipped mid-sentence) — a
+#: correctness floor, not a knob to shave for a latency number. Enforced by clamping at
+#: the point of use (``snail.vendor.gemini.clamp_silence_ms``), never by raising, so a
+#: too-low config degrades to the safe floor instead of failing.
+MIN_SILENCE_DURATION_MS = 500
+
+
+class TurnDetectionParam(msgspec.Struct, frozen=True, kw_only=True):
+    """Vendor-neutral server-VAD end-of-speech tuning, bound at setup.
+
+    ``silence_duration_ms`` defaults to the floor itself (:data:`MIN_SILENCE_DURATION_MS`)
+    — the lowest latency a vendor's server-side VAD can safely commit to without
+    clipping real speech.
+    """
+
+    silence_duration_ms: int = MIN_SILENCE_DURATION_MS
+    prefix_padding_ms: int = 150
+    start_sensitivity_high: bool = True
+    end_sensitivity_high: bool = True
+
+
 class ResponseModality(enum.Enum):
     """Per-agent output modality (docs 05).
 
@@ -70,6 +94,8 @@ class SetupParam(msgspec.Struct, frozen=True, kw_only=True):
     response_modality: ResponseModality = ResponseModality.AUDIO
     #: which user-audio source this agent consumes (raw vs cleaned, docs 11).
     input_source: InputSource = InputSource.CLEAN
+    #: server-VAD end-of-speech tuning (docs 11 TTFB); floored regardless (see above).
+    turn_detection: TurnDetectionParam = TurnDetectionParam()
 
 
 class JoinContext(msgspec.Struct, frozen=True, kw_only=True):

@@ -7,7 +7,12 @@ key-free stand-in for deterministic tests (09§E).
 
 from .base import VendorAdapter
 from .capabilities import Backend, VendorCapabilities
-from .gemini import GeminiAdapter, gemini_capabilities
+from .gemini import (
+    GeminiAdapter,
+    clamp_silence_ms,
+    gemini_capabilities,
+    realtime_input_config,
+)
 from .events import (
     AgentTranscript,
     GoAway,
@@ -22,11 +27,13 @@ from .events import (
 from .media import MediaChunk, MediaKind, RealtimeControl
 from .mock import MockVendorAdapter
 from .params import (
+    MIN_SILENCE_DURATION_MS,
     InputSource,
     JoinContext,
     ResponseModality,
     SetupParam,
     ToolSpec,
+    TurnDetectionParam,
 )
 
 __all__ = [
@@ -38,12 +45,16 @@ __all__ = [
     "ResponseModality",
     "InputSource",
     "ToolSpec",
+    "TurnDetectionParam",
+    "MIN_SILENCE_DURATION_MS",
     "MediaChunk",
     "MediaKind",
     "RealtimeControl",
     "MockVendorAdapter",
     "GeminiAdapter",
+    "clamp_silence_ms",
     "gemini_capabilities",
+    "realtime_input_config",
     # parsed events
     "ParsedEvent",
     "UserTranscript",

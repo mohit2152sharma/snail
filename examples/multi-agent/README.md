@@ -63,7 +63,8 @@ handoff. **Hand off** buttons force a switch (and are how you leave translate mo
 | agent identity + tools | `AgentSpec` + `SetupParam` (`backend/agents.py`) |
 | tool handlers | `Tool` / `ToolRegistry` (`backend/tools.py`) |
 | `start_echo`→echo, `start_translation`→translate, `stop`→host | `RulePolicy` on tool results (`backend/routing.py`) |
-| server-side VAD + translation config | `VadGeminiAdapter` / `TranslateGeminiAdapter` (`backend/adapter.py`) |
+| server-side VAD (floored end-of-speech) | `SetupParam.turn_detection` on base `GeminiAdapter` (`snail.vendor.gemini`) |
+| translation config | `TranslateGeminiAdapter` (`backend/adapter.py`) |
 | one active + handoff + token | `Router` + `OutputGate` (`backend/bridge.py`) |
 | mic Opus → agents, active → client | `AudioPipeline` (`FanoutBus` + `OutputGate` + `JitterBuffer` + `OpusCodec`) |
 | per-agent event/tool loop | `Session` (one per connection, shared `Router`) |
