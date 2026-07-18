@@ -34,21 +34,27 @@ class InputSource(enum.Enum):
 
 
 #: Floor for vendor server-VAD end-of-speech silence, in ms (docs 11 TTFB). This is the
-#: dominant, framework-uncontrollable slice of per-turn latency: the vendor waits this
-#: long after the user stops talking before deciding the turn ended. Below this floor,
-#: real speech risks a false end-of-turn (a trailing word clipped mid-sentence) — a
-#: correctness floor, not a knob to shave for a latency number. Enforced by clamping at
-#: the point of use (``snail.vendor.gemini.clamp_silence_ms``), never by raising, so a
-#: too-low config degrades to the safe floor instead of failing.
-MIN_SILENCE_DURATION_MS = 500
+#: single biggest lever on per-turn TTFB: the vendor waits this long after the user
+#: stops talking before deciding the turn ended and starting to generate. Google's own
+#: Gemini Live guidance recommends 500-800ms and warns that 100-200ms risks ending
+#: turns on natural mid-sentence pauses (fragmented, lower-quality transcription and
+#: responses) — this floor was 500ms for exactly that reason. It was deliberately
+#: relaxed to 200ms to chase a sub-250ms per-turn TTFB target (half the ~500ms industry
+#: bar both pipecat and LiveKit publish) — a conscious quality-for-latency trade the
+#: caller made, not a default anyone should assume is risk-free. Enforced by clamping
+#: at the point of use (``snail.vendor.gemini.clamp_silence_ms``), never by raising, so
+#: a too-low config degrades to this floor instead of failing outright.
+MIN_SILENCE_DURATION_MS = 200
 
 
 class TurnDetectionParam(msgspec.Struct, frozen=True, kw_only=True):
     """Vendor-neutral server-VAD end-of-speech tuning, bound at setup.
 
     ``silence_duration_ms`` defaults to the floor itself (:data:`MIN_SILENCE_DURATION_MS`)
-    — the lowest latency a vendor's server-side VAD can safely commit to without
-    clipping real speech.
+    — the lowest latency this framework will commit to. Below Google's recommended
+    500-800ms range, real speech risks a false end-of-turn on a mid-sentence pause; the
+    floor was lowered to 200ms specifically to chase aggressive TTFB targets, so treat
+    this default as "fast, tuned for a demo/benchmark," not "safe for every caller."
     """
 
     silence_duration_ms: int = MIN_SILENCE_DURATION_MS

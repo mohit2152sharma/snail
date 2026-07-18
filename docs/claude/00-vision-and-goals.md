@@ -41,6 +41,48 @@ Where performance actually matters, honestly assessed:
 **Honest positioning:** "much cheaper to run + near-zero barge-in/handoff latency,"
 verified by a benchmark harness — not "30x faster real-time."
 
+### Per-turn TTFB target vs pipecat/livekit (sourced)
+
+Published numbers found for the two named competitors (see PR discussion for search
+sources — pipecat's own docs/benchmark repo, LiveKit's own blog + third-party
+multi-stack benchmarks):
+
+```
+pipecat   worked-example component TTFB (STT 200ms + LLM TTFT 268ms + TTS TTFB 44ms)
+              ≈ 512ms      (their own P95 component target: <300ms per stage)
+          production median, cross-platform benchmark (Cekura)   ≈ 3.15s (default config)
+livekit   own stated bar: "Time-To-First-Audio must stay under 500ms"
+          3rd-party 30-stack benchmark: default AgentSession  ≈ 1.2-1.4s p95
+                                          fully latency-tuned  ≈ 500-650ms p95
+```
+
+Target: **under 250ms** — half the ~500ms bar both frameworks publish as their own
+quality line. Honest budget against that target (docs 11 for the mechanism):
+
+```
+silence-dwell (vendor VAD, our floor)     ~200ms   (relaxed from a 500ms floor —
+                                                     Google's own Gemini Live guidance
+                                                     recommends 500-800ms and warns
+                                                     100-200ms risks clipping natural
+                                                     pauses; this is a deliberate
+                                                     quality-for-latency trade, not a
+                                                     free win)
+vendor generation (STT-finalize+LLM+TTS,   unmeasured — bundled inside one vendor
+  bundled, opaque)                          call (Gemini Live), not framework code;
+                                             public estimates put comparable bundled
+                                             models at 300-600ms first-audio-chunk
+vendor round trip + framework overhead     ~10ms    (adaptive jitter floor, docs 11)
+```
+
+**Reality check:** the 200ms dwell + ~10ms framework overhead is the only part this
+codebase's algorithms/data-structures can move, and it's already near its floor. The
+remaining, larger piece (vendor generation) is Google's compute, not ours — so a
+confident "<250ms, guaranteed" claim would be exactly the overselling this doc warns
+against. What's real: `ClientBridge.ttfb_stats` (docs 11) measures the actual end-to-end
+number (last mic chunk in → first agent byte out) against live traffic, so the claim is
+checked, not asserted. Until measured against a real Gemini connection, treat 250ms as
+the *design target* the framework's own knobs are tuned for, not a verified result.
+
 ## Implementation constraints
 
 - **Pure Python. No custom Rust/C layer** (at least for now).

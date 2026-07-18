@@ -260,6 +260,19 @@ grows the target by one frame (capped at that ceiling); a streak of clean pops
 grow back automatically the moment the link actually gets jittery — the fixed 30ms tax
 becomes the exception, not the default.
 
+### Measuring it: `ClientBridge.ttfb_stats`
+
+The jitter-buffer decay above only reduces the framework's own slice; the number worth
+publishing is the whole thing (00 §Per-turn TTFB target). `ClientBridge` (`snail.
+transport.bridge`) tracks it directly: wall-clock from the last mic chunk ingested (the
+closest signal to "user stopped talking") to the first agent-audio byte handed to the
+client for that turn — silence-dwell + vendor generation + framework overhead, end to
+end. Armed at session start, after every `TurnComplete`, and after every barge-in flush
+(each is a fresh turn to measure). `ttfb_stats` exposes `count` / `last_ms` / `mean_ms`
+/ `p95_ms` over a bounded recent-sample window — a minimal, purpose-built measurement,
+*not* the full pluggable Observer layer (12) that's still just a design doc; that's the
+right home for this once it exists, this is the number worth having before it does.
+
 ### Gates (the two control points)
 
 ```

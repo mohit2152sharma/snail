@@ -30,6 +30,7 @@ from snail.vendor import (
     InputSource,
     MockVendorAdapter,
     SetupParam,
+    TurnComplete,
     VendorCapabilities,
 )
 
@@ -176,6 +177,50 @@ async def test_barge_in_cuts_plane_and_flushes_client() -> None:
     await b._flush_client()
     assert decode_control(sock.sent_text[-1]).type is ControlType.FLUSH
     assert pipe.stats["jitter"]["buffered"] == 0  # plane cut server-side
+
+
+@pytest.mark.asyncio
+async def test_ttfb_measures_last_ingest_to_first_agent_byte() -> None:
+    """The end-to-end number: last mic chunk in → first agent byte out, wall clock."""
+    pipe = _pipeline()
+    conn = _conn(FakeTransport())
+    sock = FakeSocket()
+    ticks = iter([100.0, 100.35])  # ingest at t=100.0s, first byte out at t=100.35s
+    b = ClientBridge(socket=sock, connection=conn, pipeline=pipe, clock=lambda: next(ticks))
+    pipe.hold_token("agent")
+    assert b.ttfb_stats["count"] == 0  # nothing measured yet
+
+    await b._ingest_audio(PcmCodec().encode(_samples(480)))
+    await b._to_client(_samples(960).tobytes())  # arms jitter (prefill 1) → first byte
+
+    stats = b.ttfb_stats
+    assert stats["count"] == 1
+    assert stats["last_ms"] == pytest.approx(350.0)
+
+
+@pytest.mark.asyncio
+async def test_ttfb_rearms_on_turn_complete_and_barge_in() -> None:
+    pipe = _pipeline()
+    conn = _conn(FakeTransport())
+    sock = FakeSocket()
+    b = ClientBridge(socket=sock, connection=conn, pipeline=pipe)
+    pipe.hold_token("agent")
+
+    await b._ingest_audio(PcmCodec().encode(_samples(480)))
+    await b._to_client(_samples(960).tobytes())  # turn 1's first byte
+    assert b.ttfb_stats["count"] == 1
+
+    await b._to_client(_samples(960).tobytes())  # more of the same turn: not re-measured
+    assert b.ttfb_stats["count"] == 1
+
+    await b._on_vendor_msg({"type": "turn_complete"})  # arms turn 2
+    await b._ingest_audio(PcmCodec().encode(_samples(480)))
+    await b._to_client(_samples(960).tobytes())
+    assert b.ttfb_stats["count"] == 2
+
+    await b._flush_client()  # barge-in also arms a fresh measurement
+    await b._to_client(_samples(960).tobytes())
+    assert b.ttfb_stats["count"] == 3
 
 
 @pytest.mark.asyncio
