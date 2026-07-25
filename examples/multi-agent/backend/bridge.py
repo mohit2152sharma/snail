@@ -20,7 +20,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
+from collections import deque
 
 log = logging.getLogger("multiagent")
 
@@ -28,10 +30,12 @@ from snail.audio import (
     FRAME_LEN,
     AudioPipeline,
     AudioSource,
+    EnergyVad,
     FanoutBus,
     FramePool,
     JitterBuffer,
     LazyResampler,
+    VadEvent,
 )
 from snail.audio.opus_codec import OpusCodec
 from snail.audio.soxr_backend import SoxrResampleBackend
@@ -52,9 +56,9 @@ from snail.tools import ToolRegistry
 from snail.vendor import (
     Interrupted,
     MediaChunk,
+    RealtimeControl,
     ResponseModality,
     TurnComplete,
-    UserTranscript,
 )
 
 from .agents import ECHO_ID, HOST_ID, POOL_KEY, REANCHOR, SPECS, TRANSLATE_ID
@@ -91,12 +95,26 @@ class MultiAgentBridge:
         self._mic_bytes = 0
         self._mic_logged = 0
         self._out_bytes = 0
+        # --- endpointing (server-side VAD in manual-activity mode) -------------
+        # The bridge, not Gemini, decides end-of-speech: an energy VAD + hangover sends
+        # ACTIVITY_END ~300ms after real silence instead of Gemini's flat 800ms wait,
+        # cutting the dominant per-turn TTFB term without cutting the user off.
+        hangover = int(os.environ.get("SNAIL_VAD_HANGOVER_FRAMES", "30"))
+        self._vad = EnergyVad(
+            hangover_frames=hangover,
+            start_frames=int(os.environ.get("SNAIL_VAD_START_FRAMES", "3")),
+            margin=float(os.environ.get("SNAIL_VAD_MARGIN", "3.0")),
+        )
+        self._hangover_s = hangover * 0.010  # frames → seconds (10ms/frame)
+        self._in_speech = False
+        self._sent_start = False  # ACTIVITY_START sent for the current speech segment
+        self._preroll: deque[bytes] = deque(maxlen=20)  # ~200ms pre-roll (onset guard)
         # --- per-turn TTFB instrumentation -------------------------------------
-        # Measures the CONTROLLABLE sub-window: turn-end (Gemini finalized the user's
-        # turn, i.e. the 800ms VAD silence has elapsed) → first agent audio byte out.
-        # The 800ms silence itself lives inside Gemini's VAD and is not observable here.
-        self._ttfb_t0: float | None = None  # monotonic ts of user-turn finalization
-        self._ttfb_pending = False  # armed until this turn's first audio byte fires
+        # Now that the bridge decides end-of-speech, t0 is the last speech frame
+        # (END_time − hangover), so this measures the full end-of-speech→first-byte
+        # window — the target metric — server-side.
+        self._ttfb_t0: float | None = None
+        self._ttfb_pending = False  # armed at ACTIVITY_END until first audio byte fires
         # per-agent "you hold the token" gate: only the active agent pumps receive.
         self._active_ev: dict[str, asyncio.Event] = {
             cid: asyncio.Event() for cid in self._agent_ids
@@ -234,6 +252,11 @@ class MultiAgentBridge:
         # drop any residual audio the previous agent left in the jitter/gate rings so the
         # newly-active agent starts clean (no tail of the old agent bleeding through).
         self._pipeline.cut()
+        # reset endpointing so the new agent isn't handed a dangling half-turn.
+        self._vad.reset()
+        self._in_speech = False
+        self._sent_start = False
+        self._preroll.clear()
         log.info("promote → %s", agent_id)
         asyncio.create_task(self._emit(active_agent_changed(agent_id)))
         # re-anchor the agent's behavior after an excursion (non-triggering context turn).
@@ -267,7 +290,12 @@ class MultiAgentBridge:
             data = msg.get("bytes")
             if data is not None:
                 if not self._muted:
-                    self._pipeline.on_client_audio(data)
+                    for f in self._pipeline.on_client_audio(data):
+                        ev = self._vad.push(f)
+                        if ev is VadEvent.START:
+                            self._in_speech = True
+                        elif ev is VadEvent.END:
+                            await self._end_speech()
                     await self._forward_drained()
                 continue
             text = msg.get("text")
@@ -277,11 +305,25 @@ class MultiAgentBridge:
                     return
 
     async def _forward_drained(self) -> None:
+        """Forward mic audio to the active agent, but only between VAD START/END, with an
+        ACTIVITY_START/END-bracketed manual-activity turn and a pre-roll onset guard."""
+        active = self._router.active_id
         for cid, chunks in self._pipeline.drain().items():
             conn = self._conns.get(cid)
-            if conn is None:
+            if conn is None or cid != active:
                 continue
             rate = conn.adapter.capabilities.input_sample_rate
+            if not self._in_speech:
+                # silent: retain as pre-roll (bounded), do not forward yet
+                self._preroll.extend(chunks)
+                continue
+            if not self._sent_start:
+                await conn.send_realtime_control(RealtimeControl.ACTIVITY_START)
+                self._sent_start = True
+                # flush the pre-roll so the word onset isn't clipped
+                for pre in self._preroll:
+                    await conn.send_realtime(MediaChunk.audio(pre, sample_rate=rate))
+                self._preroll.clear()
             n = 0
             for ch in chunks:
                 await conn.send_realtime(MediaChunk.audio(ch, sample_rate=rate))
@@ -290,6 +332,20 @@ class MultiAgentBridge:
             if self._mic_bytes - self._mic_logged > 96000:  # ~1s @16k mono
                 log.info("mic→%s: %d bytes total", cid, self._mic_bytes)
                 self._mic_logged = self._mic_bytes
+
+    async def _end_speech(self) -> None:
+        """VAD END: close the user turn with ACTIVITY_END and arm the TTFB timer.
+
+        ``t0`` is the last speech frame (END fires exactly ``hangover`` after it), so the
+        logged latency is the full end-of-speech→first-byte window.
+        """
+        self._in_speech = False
+        conn = self._conns.get(self._router.active_id)
+        if conn is not None and self._sent_start:
+            await conn.send_realtime_control(RealtimeControl.ACTIVITY_END)
+            self._ttfb_t0 = time.monotonic() - self._hangover_s
+            self._ttfb_pending = True
+        self._sent_start = False
 
     async def _handle_control(self, text: str) -> None:
         try:
@@ -335,14 +391,10 @@ class MultiAgentBridge:
             for ev in conn.adapter.parse_event(raw):
                 if isinstance(ev, Interrupted):
                     self._pipeline.cut()
-                # TTFB: arm the timer when the active agent's user turn is finalized
-                # (VAD silence elapsed → model about to respond); disarm at turn end.
-                if self._router.active_id == cid:
-                    if isinstance(ev, UserTranscript) and ev.is_final:
-                        self._ttfb_t0 = time.monotonic()
-                        self._ttfb_pending = True
-                    elif isinstance(ev, TurnComplete):
-                        self._ttfb_pending = False
+                # TTFB is armed at ACTIVITY_END (_end_speech); disarm on turn end so a
+                # stale timer can't fire against the next turn.
+                if self._router.active_id == cid and isinstance(ev, TurnComplete):
+                    self._ttfb_pending = False
                 j = to_client_json(ev, agent_id=cid)
                 if j is not None:
                     txt = j.get("text")
@@ -362,12 +414,16 @@ class MultiAgentBridge:
         async def on_audio(pcm: bytes) -> None:
             if self._router.active_id != cid:
                 return  # only the token holder's audio reaches the client
-            # TTFB: first audio byte of this turn → log turn-end→first-byte latency.
+            # TTFB: first audio byte of this turn → log end-of-speech→first-byte latency.
             if self._ttfb_pending and self._ttfb_t0 is not None:
                 self._ttfb_pending = False
                 ttfb_ms = (time.monotonic() - self._ttfb_t0) * 1000.0
-                log.info("TTFB %s turn-end→first-byte: %.0f ms", cid, ttfb_ms)
+                log.info("TTFB %s end-of-speech→first-byte: %.0f ms", cid, ttfb_ms)
             self._pipeline.on_vendor_audio(pcm, vendor_rate=rate)
+            # One WS binary message == one opus packet: the frontend downlink decodes each
+            # message as a single EncodedAudioChunk, so egress frames are NOT coalesced
+            # (concatenated opus packets would fail to decode). Per-frame send is required
+            # by the wire protocol; coalescing would need length-framing (out of scope).
             while True:
                 frame = self._pipeline.playout(cid)
                 if frame is None:
