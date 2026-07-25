@@ -131,10 +131,16 @@ class AudioPipeline:
                 frame = sub.ring.pop()
                 if frame is None:
                     break
-                resampled = self._resampler.resample(
-                    frame.samples, from_rate=INTERIOR_RATE, to_rate=sub.target_rate
-                )
-                chunks.append(np.ascontiguousarray(resampled, dtype=np.int16).tobytes())
+                if sub.target_rate == INTERIOR_RATE:
+                    # no resample needed → skip the ascontiguousarray copy (hot-path alloc)
+                    chunks.append(frame.samples.tobytes())
+                else:
+                    resampled = self._resampler.resample(
+                        frame.samples, from_rate=INTERIOR_RATE, to_rate=sub.target_rate
+                    )
+                    chunks.append(
+                        np.ascontiguousarray(resampled, dtype=np.int16).tobytes()
+                    )
                 self._pool.release(frame)
             if chunks:
                 out[sub.id] = chunks
