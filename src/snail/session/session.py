@@ -78,7 +78,11 @@ class Session:
 
     async def on_vendor_raw(self, raw: dict) -> None:
         """Parse one raw vendor message and dispatch every neutral event it yields."""
-        for ev in self._adapter.parse_event(raw):
+        await self.on_events(self._adapter.parse_event(raw))
+
+    async def on_events(self, events: list[ParsedEvent]) -> None:
+        """Dispatch already-parsed neutral events (caller parsed once — no reparse)."""
+        for ev in events:
             await self.handle_event(ev)
 
     async def handle_event(self, ev: ParsedEvent) -> None:

@@ -388,7 +388,8 @@ class MultiAgentBridge:
         session = self._sessions[cid]
 
         async def on_msg(raw) -> None:
-            for ev in conn.adapter.parse_event(raw):
+            parsed = conn.adapter.parse_event(raw)  # parse once; reused by the session
+            for ev in parsed:
                 if isinstance(ev, Interrupted):
                     self._pipeline.cut()
                 # TTFB is armed at ACTIVITY_END (_end_speech); disarm on turn end so a
@@ -403,7 +404,7 @@ class MultiAgentBridge:
                     else:
                         log.info("event %s from %s", j["type"], cid)
                     await self._emit(j)
-            await session.on_vendor_raw(raw)
+            await session.on_events(parsed)  # was on_vendor_raw(raw) — no second parse
 
         return on_msg
 
