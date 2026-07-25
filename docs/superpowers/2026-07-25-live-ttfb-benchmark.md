@@ -24,12 +24,18 @@ Native-audio inference floor is large (~3s), so it dominates the window.
 ### `gemini-3.1-flash-live-preview` (lower-latency; representative)
 Auto baseline median = **1517 ms**. Inference+network floor ≈ **760 ms** (fixed).
 
-| manual hangover | median | reduction vs auto |
-|---|---|---|
-| 300 ms | 1147 ms | **24%** |
-| 150 ms | 1026 ms | **32%** |
-| 80 ms | 841 ms | **45%** |
-| ~0 ms (extrapolated) | ~760 ms | **~50%** |
+| manual hangover | median | reduction vs auto | pause-tolerance |
+|---|---|---|---|
+| 300 ms | 1147 ms | **24%** | safe |
+| 150 ms | 1026 ms | **32%** | good |
+| 80 ms | 841 ms | **45%** | aggressive |
+| **20 ms (current default)** | **779 ms** | **49%** (760 ms saved, 8 trials) | clips pauses (barge-in) |
+| 0 ms | ~760–800 ms | **47–50%** (noisy) | clips pauses |
+
+The 20ms row is the shipped default (`SNAIL_VAD_HANGOVER_FRAMES=2`): median **49%**, trials
+straddle 50% (best 667ms = 57%, worst 901ms = 42%). The median cannot be pushed cleanly
+past 50% on this model because the floor alone (~760ms) is ~50% of the 1538ms baseline —
+the model, not the endpointing, is the wall.
 
 ## Interpretation
 
@@ -48,10 +54,17 @@ hangover ↔ barge-in ↔ latency tradeoff.
 
 ## Recommendation
 
-Operating point is a product call (`SNAIL_VAD_HANGOVER_FRAMES`, 10ms/frame):
-- **150 ms (15 frames)** — ~32% live cut, good pause tolerance. Suggested default.
-- **300 ms (30 frames)** — ~24%, most conservative (current default).
-- **80 ms (8 frames)** — ~45%, aggressive; only with a well-tuned floor/margin.
+Operating point is a product call (`SNAIL_VAD_HANGOVER_FRAMES`, 10ms/frame). The shipped
+default chases the 50% target and accepts the barge-in tradeoff:
+- **20 ms (2 frames) — shipped default** — ~49% median (straddles 50%); clips mid-sentence
+  pauses. This is the max reduction the model floor allows.
+- **150 ms (15 frames)** — ~32% cut, good pause tolerance. Recommended for a natural
+  conversational feel.
+- **300 ms (30 frames)** — ~24%, most conservative.
+
+Reliably exceeding 50% needs a lower floor than this model+network path gives: a
+lower-latency live model, or a deployment co-located with the model region (the ~760ms
+floor measured here includes local network RTT).
 
 Reproduce:
 ```

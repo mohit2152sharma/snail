@@ -36,6 +36,9 @@ BASELINE_SILENCE_MS = 800.0  # auto-VAD silence_duration_ms host/echo used befor
 
 
 async def _make_bridge():
+    import os
+
+    os.environ["SNAIL_VAD_HANGOVER_FRAMES"] = "30"  # pin: measure the 300ms-hangover cut
     conn = FakeConn(HOST_ID)
     sock = FakeSocket()
     bridge = MultiAgentBridge(

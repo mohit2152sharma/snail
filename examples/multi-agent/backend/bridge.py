@@ -97,9 +97,14 @@ class MultiAgentBridge:
         self._out_bytes = 0
         # --- endpointing (server-side VAD in manual-activity mode) -------------
         # The bridge, not Gemini, decides end-of-speech: an energy VAD + hangover sends
-        # ACTIVITY_END ~300ms after real silence instead of Gemini's flat 800ms wait,
-        # cutting the dominant per-turn TTFB term without cutting the user off.
-        hangover = int(os.environ.get("SNAIL_VAD_HANGOVER_FRAMES", "30"))
+        # ACTIVITY_END after `hangover` frames of sub-threshold audio instead of Gemini's
+        # flat 800ms wait, cutting the dominant per-turn TTFB term.
+        #
+        # DEFAULT IS AGGRESSIVE (20ms) to chase the 50% TTFB target — this trades
+        # pause-tolerance for latency and WILL clip mid-sentence pauses (barge-in). For a
+        # conversational profile use SNAIL_VAD_HANGOVER_FRAMES=15 (150ms, ~32% cut) or 30
+        # (300ms, ~24%). See docs/superpowers/2026-07-25-live-ttfb-benchmark.md.
+        hangover = int(os.environ.get("SNAIL_VAD_HANGOVER_FRAMES", "2"))
         self._vad = EnergyVad(
             hangover_frames=hangover,
             start_frames=int(os.environ.get("SNAIL_VAD_START_FRAMES", "3")),

@@ -114,7 +114,11 @@ def _arc(codec, segments):
     return [codec.encode(pcm[i : i + 480]) for i in range(0, total, 480)]
 
 
-async def _make_bridge():
+async def _make_bridge(hangover_frames: int = 30):
+    # Pin the hangover so these tests are independent of the shipped (aggressive) default.
+    import os
+
+    os.environ["SNAIL_VAD_HANGOVER_FRAMES"] = str(hangover_frames)
     conn = FakeConn(HOST_ID)
     sock = FakeSocket()
     bridge = MultiAgentBridge(
