@@ -59,3 +59,29 @@ set -a && . examples/multi-agent/.env && set +a
 SNAIL_BENCH_MODEL=gemini-3.1-flash-live-preview SNAIL_BENCH_HANGOVER_MS=150 \
   .venv/bin/python examples/multi-agent/bench_live_ttfb.py
 ```
+
+## Scalability (hot-path cost & event-loop saturation)
+
+`tests/bench/` (`pytest -m bench`), on this dev box:
+
+| op | cost | ceiling (10ms cadence) |
+|---|---|---|
+| opus **encode** (egress) | 135 us/frame | **~74 sessions/core** |
+| opus decode (ingress) | 62 us/frame | ~160 sessions/core |
+| soxr 48k→16k resample | 6 us/frame | ~1737 sessions/core |
+| ingress→drain (whole path) | 10 us/frame | — |
+
+Whole-pipeline load test (N concurrent sessions pumping 20ms ticks) — event-loop lag
+stays **flat**:
+
+| N sessions | loop p50 | loop p99 |
+|---|---|---|
+| 1 | 1.0 ms | 1.3 ms |
+| 10 | 1.0 ms | 1.2 ms |
+| 50 | 0.8 ms | 1.5 ms |
+
+**Finding:** the ingress/routing hot path scales flat to 50 sessions; **opus encode is the
+single scale ceiling** (~74 sessions/core). Follow-up if higher density is needed: opus
+encode does not cheaply offload (thread pool won't help unless the ext releases the GIL) —
+options are a process/worker pool for egress encode, or letting the client decode PCM.
+The single-parse and drain no-copy wins removed per-message/per-frame overhead on the way.
