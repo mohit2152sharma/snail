@@ -30,6 +30,7 @@ class FakeCaps:
 
 class FakeAdapter:
     capabilities = FakeCaps()
+    manual_activity = True  # exercise the manual-VAD marker path
 
     def parse_event(self, raw):
         return []
@@ -133,7 +134,7 @@ async def test_endpointing_brackets_audio_with_markers():
     bridge, sock, conn = await _make_bridge()
     seq = _arc(
         OpusCodec(),
-        [("sil", 15), ("speech", 8), ("sil", 35)],  # warm-up · START · >hangover → END
+        [("sil", 15), ("speech", 22), ("sil", 35)],  # warm-up · START · >hangover → END
     )
     sock.inbox = [{"type": "x", "bytes": b} for b in seq]
     await bridge._pump_client()
@@ -152,7 +153,7 @@ async def test_brief_pause_does_not_end_turn():
     bridge, sock, conn = await _make_bridge()
     seq = _arc(
         OpusCodec(),
-        [("sil", 15), ("speech", 8), ("sil", 10), ("speech", 8), ("sil", 5)],
+        [("sil", 15), ("speech", 22), ("sil", 10), ("speech", 22), ("sil", 5)],
     )  # pause of 10 < hangover(30) → no END
     sock.inbox = [{"type": "x", "bytes": b} for b in seq]
     await bridge._pump_client()
@@ -164,7 +165,7 @@ async def test_brief_pause_does_not_end_turn():
 @pytest.mark.asyncio
 async def test_ttfb_armed_at_end_speech():
     bridge, sock, conn = await _make_bridge()
-    seq = _arc(OpusCodec(), [("sil", 15), ("speech", 8), ("sil", 35)])
+    seq = _arc(OpusCodec(), [("sil", 15), ("speech", 22), ("sil", 35)])
     sock.inbox = [{"type": "x", "bytes": b} for b in seq]
     await bridge._pump_client()
     assert bridge._ttfb_pending is True

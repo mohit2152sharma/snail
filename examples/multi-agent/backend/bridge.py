@@ -109,12 +109,23 @@ class MultiAgentBridge:
         self._vad = EnergyVad(
             hangover_frames=hangover,
             start_frames=int(os.environ.get("SNAIL_VAD_START_FRAMES", "3")),
-            margin=float(os.environ.get("SNAIL_VAD_MARGIN", "3.0")),
+            # margin 4.0: live testing showed 3.0 let agent echo trip spurious barge-ins.
+            margin=float(os.environ.get("SNAIL_VAD_MARGIN", "4.0")),
         )
         self._hangover_s = hangover * 0.010  # frames → seconds (10ms/frame)
         self._in_speech = False
-        self._sent_start = False  # ACTIVITY_START sent for the current speech segment
-        self._preroll: deque[bytes] = deque(maxlen=20)  # ~200ms pre-roll (onset guard)
+        # Single source of truth for the manual-activity handshake: exactly one
+        # ACTIVITY_START must precede each ACTIVITY_END. Gemini rejects a double-start or
+        # an end-without-start with a 1007 "Precondition check failed" that kills the
+        # connection, so open/close are made idempotent (guarded on this flag).
+        self._activity_open = False
+        self._preroll: deque[bytes] = deque(maxlen=32)  # pre-roll / pre-open buffer
+        # Don't open a manual activity until the segment carries this much real speech:
+        # Gemini rejects an activity_start→activity_end that carried too little audio with
+        # a 1007 precondition failure. Sub-threshold blips (noise/echo after barge-in)
+        # thus never emit markers. 16kHz mono s16 = 32 bytes/ms.
+        self._min_open_bytes = int(os.environ.get("SNAIL_VAD_MIN_OPEN_MS", "120")) * 32
+        self._seg_bytes = 0  # audio bytes buffered in the not-yet-opened segment
         # --- per-turn TTFB instrumentation -------------------------------------
         # Now that the bridge decides end-of-speech, t0 is the last speech frame
         # (END_time − hangover), so this measures the full end-of-speech→first-byte
@@ -258,10 +269,12 @@ class MultiAgentBridge:
         # drop any residual audio the previous agent left in the jitter/gate rings so the
         # newly-active agent starts clean (no tail of the old agent bleeding through).
         self._pipeline.cut()
-        # reset endpointing so the new agent isn't handed a dangling half-turn.
+        # reset endpointing so the new agent isn't handed a dangling half-turn. The old
+        # agent's activity (if any) is closed on demote; the new agent starts closed.
         self._vad.reset()
         self._in_speech = False
-        self._sent_start = False
+        self._activity_open = False
+        self._seg_bytes = 0
         self._preroll.clear()
         log.info("promote → %s", agent_id)
         asyncio.create_task(self._emit(active_agent_changed(agent_id)))
@@ -284,6 +297,16 @@ class MultiAgentBridge:
         # the host's confirmation generated after the control tool) is consumed and
         # *dropped* here, not left buffered to replay when the agent is promoted back.
         self._pipeline.detach_consumer(agent_id)
+        # Close any open manual-activity on the demoted connection so it isn't left
+        # dangling — a later promote-back would ACTIVITY_START over it (1007).
+        if self._activity_open:
+            self._activity_open = False
+            self._in_speech = False
+            conn = self._conns.get(agent_id)
+            if conn is not None:
+                asyncio.create_task(
+                    conn.send_realtime_control(RealtimeControl.ACTIVITY_END)
+                )
         log.info("demote → %s", agent_id)
 
     # --- client → agents --------------------------------------------------
@@ -319,17 +342,29 @@ class MultiAgentBridge:
             if conn is None or cid != active:
                 continue
             rate = conn.adapter.capabilities.input_sample_rate
+            if not getattr(conn.adapter, "manual_activity", False):
+                # auto-VAD agent (e.g. translate): stream mic continuously, no markers.
+                for ch in chunks:
+                    await conn.send_realtime(MediaChunk.audio(ch, sample_rate=rate))
+                continue
             if not self._in_speech:
                 # silent: retain as pre-roll (bounded), do not forward yet
                 self._preroll.extend(chunks)
                 continue
-            if not self._sent_start:
-                await conn.send_realtime_control(RealtimeControl.ACTIVITY_START)
-                self._sent_start = True
-                # flush the pre-roll so the word onset isn't clipped
+            if not self._activity_open:
+                # In speech but activity not open yet: buffer until the segment carries
+                # >= min_open_bytes of real audio, so a spurious blip never emits markers
+                # (Gemini 1007s on a too-short activity). Then open + flush the buffer.
+                self._preroll.extend(chunks)
+                self._seg_bytes += sum(len(c) for c in chunks)
+                if self._seg_bytes < self._min_open_bytes:
+                    continue
+                await self._open_activity(conn)
                 for pre in self._preroll:
                     await conn.send_realtime(MediaChunk.audio(pre, sample_rate=rate))
                 self._preroll.clear()
+                self._seg_bytes = 0
+                continue  # this tick's audio already flushed via the pre-roll
             n = 0
             for ch in chunks:
                 await conn.send_realtime(MediaChunk.audio(ch, sample_rate=rate))
@@ -346,12 +381,32 @@ class MultiAgentBridge:
         logged latency is the full end-of-speech→first-byte window.
         """
         self._in_speech = False
-        conn = self._conns.get(self._router.active_id)
-        if conn is not None and self._sent_start:
-            await conn.send_realtime_control(RealtimeControl.ACTIVITY_END)
+        # discard any sub-threshold buffered segment that never opened an activity
+        self._seg_bytes = 0
+        self._preroll.clear()
+        if self._activity_open:  # only arm TTFB for a turn we actually opened
+            await self._close_activity()
             self._ttfb_t0 = time.monotonic() - self._hangover_s
             self._ttfb_pending = True
-        self._sent_start = False
+
+    async def _open_activity(self, conn) -> None:
+        """Send ACTIVITY_START once per speech segment (idempotent — a double-start is a
+        Gemini 1007 precondition failure that kills the connection)."""
+        if self._activity_open:
+            return
+        await conn.send_realtime_control(RealtimeControl.ACTIVITY_START)
+        self._activity_open = True
+        log.info("→ACTIVITY_START (%s)", self._router.active_id)
+
+    async def _close_activity(self) -> None:
+        """Send ACTIVITY_END once (idempotent — an end-without-open is a 1007 too)."""
+        if not self._activity_open:
+            return
+        self._activity_open = False
+        conn = self._conns.get(self._router.active_id)
+        if conn is not None:
+            await conn.send_realtime_control(RealtimeControl.ACTIVITY_END)
+        log.info("→ACTIVITY_END (%s)", self._router.active_id)
 
     async def _handle_control(self, text: str) -> None:
         try:

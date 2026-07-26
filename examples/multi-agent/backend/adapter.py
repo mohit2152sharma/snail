@@ -67,6 +67,10 @@ class ManualVadGeminiAdapter(GeminiAdapter):
     dominant per-turn TTFB term.
     """
 
+    #: The bridge sends ACTIVITY_START/END only to agents whose adapter advertises this;
+    #: auto-VAD agents (e.g. translate) must NOT receive manual markers (mismatch → 1007).
+    manual_activity = True
+
     def build_setup(self, setup, *, resumption_handle: str | None = None):
         cfg = super().build_setup(setup, resumption_handle=resumption_handle)
         cfg.realtime_input_config = types.RealtimeInputConfig(

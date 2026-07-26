@@ -78,7 +78,7 @@ async def test_endpoint_latency_at_least_halves_vs_800ms_baseline(capsys):
         await _feed(bridge, _silence_frame(codec))
     # speech (drive START)
     phase = 0
-    for _ in range(10):
+    for _ in range(25):
         await _feed(bridge, _sine_frame(codec, phase))
         phase += 480
     assert RealtimeControl.ACTIVITY_START in conn.realtime_controls
