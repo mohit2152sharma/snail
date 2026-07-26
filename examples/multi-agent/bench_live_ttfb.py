@@ -146,10 +146,38 @@ def _manual_cfg() -> types.LiveConnectConfig:
     )
 
 
+async def _paired(client, utterance) -> None:
+    """Alternate auto/manual back-to-back so each pair shares network conditions; report
+    the median of per-pair reductions (variance-robust)."""
+    print(f"model={MODEL}  paired trials={TRIALS}  hangover={HANGOVER_MS}ms\n")
+    reductions: list[float] = []
+    for i in range(TRIALS):
+        try:
+            a = await _trial(client, _auto_cfg(), manual=False, utterance=utterance)
+            await asyncio.sleep(0.7)
+            m = await _trial(client, _manual_cfg(), manual=True, utterance=utterance)
+        except Exception as e:  # noqa: BLE001
+            print(f"  pair {i}: ERROR {type(e).__name__}: {str(e)[:100]}")
+            continue
+        if a and m:
+            r = (a - m) / a * 100
+            reductions.append(r)
+            print(f"  pair {i}: auto={a:.0f}ms manual={m:.0f}ms  reduction={r:.0f}%")
+        await asyncio.sleep(0.7)
+    if reductions:
+        med = statistics.median(reductions)
+        print(f"\nMEDIAN per-pair REDUCTION = {med:.1f}%  (n={len(reductions)})")
+    else:
+        print("\nno paired data")
+
+
 async def main() -> None:
     key = os.environ["GEMINI_API_KEY"]
     client = genai.Client(api_key=key)
     utterance = load_utterance()
+    if os.environ.get("SNAIL_BENCH_PAIRED") == "1":
+        await _paired(client, utterance)
+        return
     print(f"model={MODEL}  utterance={len(utterance)/RATE*1000:.0f}ms  trials={TRIALS}\n")
 
     results: dict[str, list[float]] = {"auto": [], "manual": []}
