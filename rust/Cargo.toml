@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["snail-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["mohit sharma <mohitlakshya@gmail.com>"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"

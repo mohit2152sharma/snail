@@ -1,0 +1,17 @@
+[package]
+name = "snail-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Snail audio-plane hot path + endpointing VAD (pure Rust, no Python)."
+
+[dependencies]
+rubato = { version = "0.15", optional = true }
+
+[features]
+default = []
+# libsoxr-quality streaming resample backend (parity target vs Python soxr).
+resample-rubato = ["dep:rubato"]
+
+[dev-dependencies]
