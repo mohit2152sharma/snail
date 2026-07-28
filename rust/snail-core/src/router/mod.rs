@@ -4,6 +4,7 @@
 pub mod gate;
 pub mod policy;
 pub mod predicate;
+pub mod router;
 pub mod signals;
 
 pub use gate::{GateStats, OutputGate};
@@ -12,6 +13,7 @@ pub use policy::{
     RulePolicy,
 };
 pub use predicate::{f, Comparison, Predicate};
+pub use router::{AgentRecord, Router, RouterEffect};
 pub use signals::{
     AgentRef, AgentRole, Candidate, HealthState, RoutingAction, RoutingDecision, RoutingEvent,
     RoutingEventKind, RoutingSignal, Seam, SessionMeta,
