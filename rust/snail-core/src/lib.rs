@@ -11,6 +11,7 @@ pub mod registry;
 pub mod router;
 pub mod tools;
 pub mod vad;
+pub mod vendor;
 
 pub use audio::{
     AudioCleaner, AudioCodec, AudioFrame, AudioPipeline, AudioSource, FanoutBus, FrameFlags,
@@ -21,3 +22,6 @@ pub use registry::{CallState, ToolCallRegistry};
 pub use router::OutputGate;
 pub use tools::{validate, ToolResult, ToolStatus};
 pub use vad::{EnergyVad, EnergyVadConfig, VadEvent, VadState};
+pub use vendor::{
+    Backend, InputSource, MediaChunk, ParsedEvent, ResponseModality, SetupParam, VendorCapabilities,
+};
