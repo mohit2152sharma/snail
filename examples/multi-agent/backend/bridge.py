@@ -39,6 +39,28 @@ from snail.audio import (
 )
 from snail.audio.opus_codec import OpusCodec
 from snail.audio.soxr_backend import SoxrResampleBackend
+
+
+class _RustVad:
+    """Adapt ``snail_rs.EnergyVad`` to the Python ``EnergyVad`` surface used by the bridge.
+
+    Feeds each interior frame as PCM16LE bytes (``ndarray.tobytes()`` — cheap, no per-sample
+    Python loop) and maps the Rust string event back to :class:`VadEvent`. Behaviour is
+    byte-identical to the Python VAD (tests/test_rust_parity.py); only the runtime differs.
+    """
+
+    _MAP = {"none": VadEvent.NONE, "start": VadEvent.START, "end": VadEvent.END}
+
+    def __init__(self, kwargs: dict) -> None:
+        import snail_rs  # imported lazily so the extension is optional
+
+        self._inner = snail_rs.EnergyVad(**kwargs)
+
+    def push(self, frame) -> VadEvent:
+        return self._MAP[self._inner.push(frame.tobytes())]
+
+    def reset(self) -> None:
+        self._inner.reset()
 from snail.context import EventLog, Item, Role
 from snail.registry import ToolCallRegistry
 from snail.router import (
@@ -106,12 +128,20 @@ class MultiAgentBridge:
         # conversational profile use SNAIL_VAD_HANGOVER_FRAMES=15 (150ms, ~32% cut) or 30
         # (300ms, ~24%). See docs/superpowers/2026-07-25-live-ttfb-benchmark.md.
         hangover = int(os.environ.get("SNAIL_VAD_HANGOVER_FRAMES", "1"))
-        self._vad = EnergyVad(
+        vad_kw = dict(
             hangover_frames=hangover,
             start_frames=int(os.environ.get("SNAIL_VAD_START_FRAMES", "3")),
             # margin 4.0: live testing showed 3.0 let agent echo trip spurious barge-ins.
             margin=float(os.environ.get("SNAIL_VAD_MARGIN", "4.0")),
         )
+        # SNAIL_RUST_VAD=1 routes the TTFB-critical endpoint decision through the Rust
+        # `snail_rs.EnergyVad` (byte-identical to the Python one — see tests/test_rust_parity.py).
+        # The deterministic Rust hot path has no GIL/GC tail pauses, so the aggressive 10ms
+        # hangover runs without the jitter that risks clipping speech on the Python path.
+        if os.environ.get("SNAIL_RUST_VAD") == "1":
+            self._vad = _RustVad(vad_kw)
+        else:
+            self._vad = EnergyVad(**vad_kw)
         self._hangover_s = hangover * 0.010  # frames → seconds (10ms/frame)
         self._in_speech = False
         # Single source of truth for the manual-activity handshake: exactly one
