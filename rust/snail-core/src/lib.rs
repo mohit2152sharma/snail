@@ -20,8 +20,9 @@ pub use audio::{
 pub use context::{Event, EventLog, EventType, Item, Projection, Role};
 pub use registry::{CallState, ToolCallRegistry};
 pub use router::OutputGate;
-pub use tools::{validate, ToolResult, ToolStatus};
+pub use tools::{execute, validate, Tool, ToolRegistry, ToolResult, ToolStatus};
 pub use vad::{EnergyVad, EnergyVadConfig, VadEvent, VadState};
 pub use vendor::{
-    Backend, InputSource, MediaChunk, ParsedEvent, ResponseModality, SetupParam, VendorCapabilities,
+    Backend, InputSource, MediaChunk, MockVendorAdapter, ParsedEvent, ResponseModality, SetupParam,
+    VendorAdapter, VendorCapabilities,
 };

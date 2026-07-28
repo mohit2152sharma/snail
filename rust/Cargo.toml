@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["snail-core", "snail-rs"]
+members = ["snail-core", "snail-rs", "snail-rt"]
 
 [workspace.package]
 version = "0.1.0"
