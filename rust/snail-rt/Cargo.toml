@@ -8,6 +8,7 @@ description = "Snail async runtime (tokio): the session orchestrator over snail-
 
 [dependencies]
 snail-core = { path = "../snail-core" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 

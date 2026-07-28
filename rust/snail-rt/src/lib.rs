@@ -5,8 +5,10 @@
 //! Gemini Live WebSocket adapter land here next (the WS adapter needs live credentials to verify).
 
 pub mod session;
+pub mod transport;
 
 pub use session::Session;
+pub use transport::{Control, ControlType};
 
 #[cfg(test)]
 mod tests {
