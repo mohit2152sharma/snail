@@ -6,12 +6,18 @@
 //! later phase migrates the orchestration layer up here too.
 
 pub mod audio;
+pub mod context;
+pub mod registry;
 pub mod router;
+pub mod tools;
 pub mod vad;
 
 pub use audio::{
     AudioCleaner, AudioCodec, AudioFrame, AudioPipeline, AudioSource, FanoutBus, FrameFlags,
     FramePool, JitterBuffer, LazyResampler, NullCleaner, OverflowPolicy, PcmCodec,
 };
+pub use context::{Event, EventLog, EventType, Item, Projection, Role};
+pub use registry::{CallState, ToolCallRegistry};
 pub use router::OutputGate;
+pub use tools::{validate, ToolResult, ToolStatus};
 pub use vad::{EnergyVad, EnergyVadConfig, VadEvent, VadState};

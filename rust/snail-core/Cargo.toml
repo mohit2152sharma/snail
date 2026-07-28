@@ -8,6 +8,7 @@ description = "Snail audio-plane hot path + endpointing VAD (pure Rust, no Pytho
 
 [dependencies]
 rubato = { version = "0.15", optional = true }
+serde_json = "1"
 
 [features]
 default = []
