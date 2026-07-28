@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>snail-rt — all-Rust passthrough test</title>
+  <style>
+    body { font: 15px system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #111; }
+    h1 { font-size: 18px; }
+    button { font: inherit; padding: 8px 16px; margin-right: 8px; border-radius: 8px; border: 1px solid #ccc; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    #log { margin-top: 16px; background: #f6f6f6; border-radius: 8px; padding: 12px; height: 260px; overflow: auto; white-space: pre-wrap; font: 12px ui-monospace, monospace; }
+    .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:#bbb; margin-right:6px; vertical-align:middle; }
+    .on { background:#2ecc71; } .err { background:#e74c3c; }
+  </style>
+</head>
+<body>
+  <h1><span id="dot" class="dot"></span>snail-rt — all-Rust single-agent passthrough</h1>
+  <p>Mic → 16 kHz PCM16 → Rust <code>ClientBridge</code> → Gemini Live → 24 kHz PCM16 → speaker.
+     No Python in the path.</p>
+  <button id="start">Start</button>
+  <button id="stop" disabled>Stop</button>
+  <button id="barge" disabled>Barge-in (local flush)</button>
+  <div id="log"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const log = (m) => { const l = $('log'); l.textContent += m + '\n'; l.scrollTop = l.scrollHeight; };
+    const setDot = (c) => { $('dot').className = 'dot ' + (c || ''); };
+
+    const IN_RATE = 16000, OUT_RATE = 24000;
+    let ws, capCtx, playCtx, micStream, node, nextPlayTime = 0, live = [];
+
+    function floatToPCM16(f32) {
+      const buf = new ArrayBuffer(f32.length * 2);
+      const view = new DataView(buf);
+      for (let i = 0; i < f32.length; i++) {
+        let s = Math.max(-1, Math.min(1, f32[i]));
+        view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); // little-endian
+      }
+      return buf;
+    }
+
+    function playPCM16(arrayBuf) {
+      const n = arrayBuf.byteLength / 2;
+      if (!n) return;
+      const view = new DataView(arrayBuf);
+      const f32 = new Float32Array(n);
+      for (let i = 0; i < n; i++) f32[i] = view.getInt16(i * 2, true) / 0x8000;
+      const ab = playCtx.createBuffer(1, n, OUT_RATE);
+      ab.copyToChannel(f32, 0);
+      const src = playCtx.createBufferSource();
+      src.buffer = ab; src.connect(playCtx.destination);
+      const t = Math.max(playCtx.currentTime, nextPlayTime);
+      src.start(t);
+      nextPlayTime = t + ab.duration;
+      live.push(src);
+      src.onended = () => { live = live.filter((s) => s !== src); };
+    }
+
+    function flushPlayback() {
+      live.forEach((s) => { try { s.stop(); } catch (e) {} });
+      live = [];
+      nextPlayTime = 0;
+    }
+
+    async function start() {
+      $('start').disabled = true;
+      capCtx = new AudioContext({ sampleRate: IN_RATE });
+      playCtx = new AudioContext({ sampleRate: OUT_RATE });
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      const srcNode = capCtx.createMediaStreamSource(micStream);
+      node = capCtx.createScriptProcessor(2048, 1, 1); // ~128ms @16k
+      node.onaudioprocess = (e) => {
+        if (!ws || ws.readyState !== 1) return;
+        ws.send(floatToPCM16(e.inputBuffer.getChannelData(0)));
+      };
+      srcNode.connect(node); node.connect(capCtx.destination);
+
+      ws = new WebSocket(`ws://${location.host}/ws`);
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => { setDot('on'); log('ws open — streaming mic'); $('stop').disabled = false; $('barge').disabled = false; };
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === 'string') {
+          const c = JSON.parse(ev.data);
+          log('control: ' + c.type);
+          if (c.type === 'flush') flushPlayback();
+          if (c.type === 'bye') stop();
+        } else {
+          playPCM16(ev.data);
+        }
+      };
+      ws.onerror = () => { setDot('err'); log('ws error (is the server running? key valid?)'); };
+      ws.onclose = () => { setDot(''); log('ws closed'); };
+    }
+
+    function stop() {
+      $('start').disabled = false; $('stop').disabled = true; $('barge').disabled = true;
+      try { ws && ws.send(JSON.stringify({ type: 'end' })); } catch (e) {}
+      try { ws && ws.close(); } catch (e) {}
+      node && node.disconnect();
+      micStream && micStream.getTracks().forEach((t) => t.stop());
+      flushPlayback();
+    }
+
+    $('start').onclick = start;
+    $('stop').onclick = stop;
+    $('barge').onclick = flushPlayback;
+  </script>
+</body>
+</html>

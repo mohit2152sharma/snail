@@ -83,8 +83,15 @@ async fn handle_session(socket: WebSocket, config: Arc<ServeConfig>) {
     let connector = GeminiConnector::new(config.api_key.clone(), adapter.clone());
     let transport = match connector.open_result(&config.spec, None).await {
         Ok(t) => t,
-        Err(_) => return, // connect failure → drop the client session
+        Err(e) => {
+            eprintln!("[snail-rt] gemini connect failed: {e}");
+            return; // drop the client session
+        }
     };
+    eprintln!(
+        "[snail-rt] client session up — gemini connected (model={})",
+        config.spec.setup.model
+    );
 
     let (to_vendor, vendor_rx) = mpsc::unbounded_channel();
     let (raw_tx, raw_rx) = mpsc::unbounded_channel();
