@@ -5,6 +5,7 @@
 pub mod adapter;
 pub mod capabilities;
 pub mod events;
+pub mod gemini;
 pub mod media;
 pub mod mock;
 pub mod params;
@@ -12,6 +13,7 @@ pub mod params;
 pub use adapter::VendorAdapter;
 pub use capabilities::{Backend, VendorCapabilities};
 pub use events::ParsedEvent;
+pub use gemini::{gemini_capabilities, GeminiAdapter};
 pub use media::{MediaChunk, MediaKind, RealtimeControl};
 pub use mock::MockVendorAdapter;
 pub use params::{InputSource, JoinContext, ResponseModality, SetupParam, ToolSpec};

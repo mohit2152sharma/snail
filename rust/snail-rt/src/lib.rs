@@ -5,11 +5,13 @@
 //! Gemini Live WebSocket adapter land here next (the WS adapter needs live credentials to verify).
 
 pub mod connection;
+pub mod gemini;
 pub mod pool;
 pub mod session;
 pub mod transport;
 
 pub use connection::{AgentConnection, AgentSpec, ConnectionMeta, ConnectionState, LiveTransport};
+pub use gemini::{GeminiConnector, GeminiLiveTransport};
 pub use pool::{ConnectionPool, Connector};
 pub use session::Session;
 pub use transport::{Control, ControlType};
