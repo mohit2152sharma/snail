@@ -2,5 +2,12 @@
 //! Router/policy layer stays in Python for now (migrated in a later phase).
 
 pub mod gate;
+pub mod predicate;
+pub mod signals;
 
 pub use gate::{GateStats, OutputGate};
+pub use predicate::{f, Comparison, Predicate};
+pub use signals::{
+    AgentRef, AgentRole, Candidate, HealthState, RoutingAction, RoutingDecision, RoutingEvent,
+    RoutingEventKind, RoutingSignal, Seam, SessionMeta,
+};
