@@ -321,6 +321,10 @@ impl VendorAdapter for GeminiAdapter {
         }
         out
     }
+
+    fn extract_output_audio(&self, raw: &Value) -> Option<Vec<u8>> {
+        GeminiAdapter::extract_output_audio(self, raw)
+    }
 }
 
 #[cfg(test)]

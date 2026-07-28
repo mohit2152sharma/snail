@@ -46,4 +46,10 @@ pub trait VendorAdapter {
 
     /// Parse one raw vendor wire message into zero or more neutral events.
     fn parse_event(&self, raw: &Value) -> Vec<ParsedEvent>;
+
+    /// Extract agent output audio (PCM16 mono bytes) from a raw message, if any. Default `None`
+    /// for adapters whose audio arrives out-of-band; the Gemini adapter pulls it from `modelTurn`.
+    fn extract_output_audio(&self, _raw: &Value) -> Option<Vec<u8>> {
+        None
+    }
 }
