@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "snail-rs"
+version = "0.1.0"
+description = "Rust hot-path (audio plane + endpointing VAD) for snail, via PyO3."
+requires-python = ">=3.14"
+classifiers = ["Programming Language :: Rust"]
+
+[tool.maturin]
+module-name = "snail_rs"
+manifest-path = "Cargo.toml"

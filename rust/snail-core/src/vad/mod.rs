@@ -2,5 +2,7 @@
 //! confident near-0ms hangover that reduces TTFB further.
 
 pub mod energy;
+pub mod model;
 
 pub use energy::{EnergyVad, EnergyVadConfig, VadEvent, VadState};
+pub use model::{EndpointVad, ModelVad, ModelVadConfig, SpeechScorer};
