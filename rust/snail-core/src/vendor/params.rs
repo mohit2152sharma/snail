@@ -4,13 +4,15 @@
 //! response_modality — the agent's STATIC identity. `JoinContext` (injected on join): history +
 //! per-client facts — genuinely dynamic per-client data.
 
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::context::Item;
 
 /// Which user-audio source an agent consumes. `Clean` is the default (RNNoise-denoised); `Raw`
 /// skips cleaning (for a self-denoising model). If no agent wants Clean, RNNoise never runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InputSource {
     Clean,
     Raw,
@@ -18,7 +20,8 @@ pub enum InputSource {
 
 /// Per-agent output modality. The active agent is `Audio`; a listener is `Text` (cheapest, needs a
 /// flip to promote) or `Audio` (promotes with no flip).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResponseModality {
     Audio,
     Text,
@@ -26,7 +29,7 @@ pub enum ResponseModality {
 
 /// Vendor-neutral tool declaration bound at setup. `parameters` is a common-denominator JSON-schema
 /// value; the adapter serializes it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ToolSpec {
     pub name: String,
     pub description: String,
@@ -36,7 +39,7 @@ pub struct ToolSpec {
 }
 
 /// The agent's static identity — bound at connect (the pool key, docs 02).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SetupParam {
     pub model: String,
     pub voice: Option<String>,

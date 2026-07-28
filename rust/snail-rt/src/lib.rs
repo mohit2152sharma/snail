@@ -4,9 +4,11 @@
 //! hosts the [`session::Session`] orchestrator; the connection pool, transport server, and the
 //! Gemini Live WebSocket adapter land here next (the WS adapter needs live credentials to verify).
 
+pub mod connection;
 pub mod session;
 pub mod transport;
 
+pub use connection::{AgentConnection, AgentSpec, ConnectionMeta, ConnectionState, LiveTransport};
 pub use session::Session;
 pub use transport::{Control, ControlType};
 
