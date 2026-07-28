@@ -13,6 +13,12 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+axum = { version = "0.7", features = ["ws"], optional = true }
+
+[features]
+default = []
+# the client-facing HTTP/WebSocket server entry point (deployment shell).
+server = ["dep:axum"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "test-util"] }

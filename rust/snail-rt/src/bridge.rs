@@ -76,7 +76,7 @@ impl PlayoutClock {
 /// Bidirectional pump between a client socket and one agent connection (passthrough — no pipeline).
 pub struct ClientBridge<S: ClientSocket> {
     socket: S,
-    adapter: Arc<dyn VendorAdapter>,
+    adapter: Arc<dyn VendorAdapter + Send + Sync>,
     to_vendor: mpsc::UnboundedSender<VendorSend>,
     from_vendor: mpsc::UnboundedReceiver<Value>,
     input_sample_rate: u32,
@@ -87,7 +87,7 @@ pub struct ClientBridge<S: ClientSocket> {
 impl<S: ClientSocket> ClientBridge<S> {
     pub fn new(
         socket: S,
-        adapter: Arc<dyn VendorAdapter>,
+        adapter: Arc<dyn VendorAdapter + Send + Sync>,
         to_vendor: mpsc::UnboundedSender<VendorSend>,
         from_vendor: mpsc::UnboundedReceiver<Value>,
         input_sample_rate: u32,

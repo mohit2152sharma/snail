@@ -16,11 +16,13 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
-use snail_core::vendor::GeminiAdapter;
+use snail_core::vendor::{GeminiAdapter, MediaChunk};
 
+use crate::bridge::VendorSend;
 use crate::connection::{AgentSpec, LiveTransport};
 use crate::pool::Connector;
 
@@ -121,6 +123,54 @@ impl GeminiConnector {
             .await
             .map_err(|e| format!("gemini setup send failed: {e}"))?;
         Ok(GeminiLiveTransport { ws })
+    }
+}
+
+/// The duplex actor that ties [`crate::bridge::ClientBridge`]'s vendor channels to a live Gemini
+/// socket. Splitting the `WebSocketStream` into sink + stream sidesteps the `select!` aliasing that
+/// blocks send + recv on one `&mut` — the idiomatic-Rust answer to Python's shared-object asyncio.
+/// Outbound [`VendorSend`] commands are serialized via the adapter + framed; inbound frames are
+/// parsed as JSON and forwarded to the session over `raw_tx`.
+pub async fn run_gemini_agent(
+    transport: GeminiLiveTransport,
+    adapter: std::sync::Arc<GeminiAdapter>,
+    mut vendor_rx: mpsc::UnboundedReceiver<VendorSend>,
+    raw_tx: mpsc::UnboundedSender<Value>,
+) {
+    use snail_core::vendor::VendorAdapter;
+    let (mut sink, mut stream) = transport.ws.split();
+    loop {
+        tokio::select! {
+            cmd = vendor_rx.recv() => {
+                let Some(cmd) = cmd else { break };
+                let inner = match cmd {
+                    VendorSend::Audio { data, rate } => {
+                        adapter.serialize_realtime(&MediaChunk::audio(data, rate))
+                    }
+                    VendorSend::Control(c) => adapter.serialize_realtime_control(c),
+                };
+                let wire = json!({ "realtimeInput": inner });
+                if sink.send(Message::Text(wire.to_string())).await.is_err() {
+                    break;
+                }
+            }
+            frame = stream.next() => {
+                match frame {
+                    Some(Ok(Message::Text(t))) => {
+                        if let Ok(v) = serde_json::from_str::<Value>(&t) {
+                            if raw_tx.send(v).is_err() { break; }
+                        }
+                    }
+                    Some(Ok(Message::Binary(b))) => {
+                        if let Ok(v) = serde_json::from_slice::<Value>(&b) {
+                            if raw_tx.send(v).is_err() { break; }
+                        }
+                    }
+                    Some(Ok(_)) => {} // ping/pong
+                    _ => break, // close / error
+                }
+            }
+        }
     }
 }
 

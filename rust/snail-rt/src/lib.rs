@@ -8,12 +8,14 @@ pub mod bridge;
 pub mod connection;
 pub mod gemini;
 pub mod pool;
+#[cfg(feature = "server")]
+pub mod serve;
 pub mod session;
 pub mod transport;
 
 pub use bridge::{ClientBridge, ClientMsg, ClientSocket, PlayoutClock, VendorSend};
 pub use connection::{AgentConnection, AgentSpec, ConnectionMeta, ConnectionState, LiveTransport};
-pub use gemini::{GeminiConnector, GeminiLiveTransport};
+pub use gemini::{run_gemini_agent, GeminiConnector, GeminiLiveTransport};
 pub use pool::{ConnectionPool, Connector};
 pub use session::Session;
 pub use transport::{Control, ControlType};
