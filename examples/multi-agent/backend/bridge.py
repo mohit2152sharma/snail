@@ -84,7 +84,7 @@ from snail.vendor import (
 )
 
 from .agents import ECHO_ID, HOST_ID, POOL_KEY, REANCHOR, SPECS, TRANSLATE_ID
-from .events import active_agent_changed, error as err_event, to_client_json
+from .events import active_agent_changed, error as err_event, to_client_json, turn_ttfb
 from .routing import build_policy
 from .tools import echo_tools, host_tools
 
@@ -144,6 +144,14 @@ class MultiAgentBridge:
             self._vad = EnergyVad(**vad_kw)
         self._hangover_s = hangover * 0.010  # frames → seconds (10ms/frame)
         self._in_speech = False
+        # Half-duplex echo guard: on speakers (no headphones) the agent's own voice loops
+        # back through the mic and trips the energy VAD → false ACTIVITY_START → self-
+        # interrupt. While the agent is producing audio (+ a short tail for the playout/echo
+        # to drain) the mic is gated: no VAD, no forward. The explicit Barge-in button still
+        # works for intentional interruption. Set SNAIL_HALF_DUPLEX=0 (headphones) to disable.
+        self._half_duplex = os.environ.get("SNAIL_HALF_DUPLEX", "1") != "0"
+        self._echo_guard_s = float(os.environ.get("SNAIL_ECHO_GUARD_MS", "400")) / 1000.0
+        self._mic_gate_until = 0.0
         # Single source of truth for the manual-activity handshake: exactly one
         # ACTIVITY_START must precede each ACTIVITY_END. Gemini rejects a double-start or
         # an end-without-start with a 1007 "Precondition check failed" that kills the
@@ -349,13 +357,20 @@ class MultiAgentBridge:
             data = msg.get("bytes")
             if data is not None:
                 if not self._muted:
-                    for f in self._pipeline.on_client_audio(data):
-                        ev = self._vad.push(f)
-                        if ev is VadEvent.START:
-                            self._in_speech = True
-                        elif ev is VadEvent.END:
-                            await self._end_speech()
-                    await self._forward_drained()
+                    # Decode always (keep the opus decoder + resampler streaming state
+                    # continuous), but while the agent is speaking, gate the mic: skip the
+                    # VAD and discard the drained mic audio (half-duplex echo guard).
+                    frames = self._pipeline.on_client_audio(data)
+                    if self._half_duplex and time.monotonic() < self._mic_gate_until:
+                        self._pipeline.drain()  # clear the fan-out rings, discard mic
+                    else:
+                        for f in frames:
+                            ev = self._vad.push(f)
+                            if ev is VadEvent.START:
+                                self._in_speech = True
+                            elif ev is VadEvent.END:
+                                await self._end_speech()
+                        await self._forward_drained()
                 continue
             text = msg.get("text")
             if text is not None:
@@ -506,11 +521,30 @@ class MultiAgentBridge:
         async def on_audio(pcm: bytes) -> None:
             if self._router.active_id != cid:
                 return  # only the token holder's audio reaches the client
-            # TTFB: first audio byte of this turn → log end-of-speech→first-byte latency.
+            # Agent is producing audio → hold the half-duplex mic gate open, plus a tail
+            # so the client-side playout + room echo drain before the mic re-arms.
+            self._mic_gate_until = time.monotonic() + self._echo_guard_s
+            # TTFB: first audio byte of this turn. Break it down so we can see where the
+            # time goes:  total = (bridge hangover we impose) + (Gemini end→first-byte).
+            #   t0                = last speech sample  (END_time − hangover_s)
+            #   t0 + hangover_s   = when ACTIVITY_END was actually sent to Gemini
+            # so model_ms (ACTIVITY_END → first byte) is Gemini's real generation latency;
+            # hangover_ms is purely the endpointing delay the bridge adds. Both are measured
+            # at the SERVER receiving Gemini's byte — the user hears it later (downlink adds
+            # jitter-buffer + opus + network + client decode).
             if self._ttfb_pending and self._ttfb_t0 is not None:
                 self._ttfb_pending = False
-                ttfb_ms = (time.monotonic() - self._ttfb_t0) * 1000.0
-                log.info("TTFB %s end-of-speech→first-byte: %.0f ms", cid, ttfb_ms)
+                now = time.monotonic()
+                total_ms = (now - self._ttfb_t0) * 1000.0
+                model_ms = (now - (self._ttfb_t0 + self._hangover_s)) * 1000.0
+                hangover_ms = self._hangover_s * 1000.0
+                log.info(
+                    "TTFB %s: total=%.0fms = hangover %.0fms + gemini(end→byte) %.0fms",
+                    cid, total_ms, hangover_ms, model_ms,
+                )
+                await self._emit(
+                    turn_ttfb(agent_id=cid, ttfb_ms=round(total_ms), model_ms=round(model_ms))
+                )
             self._pipeline.on_vendor_audio(pcm, vendor_rate=rate)
             # One WS binary message == one opus packet: the frontend downlink decodes each
             # message as a single EncodedAudioChunk, so egress frames are NOT coalesced

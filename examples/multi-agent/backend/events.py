@@ -58,6 +58,19 @@ def active_agent_changed(agent_id: str) -> dict:
     return {"type": "active_agent_changed", "agent_id": agent_id, "ts": _ts()}
 
 
+def turn_ttfb(*, agent_id: str, ttfb_ms: int, model_ms: int) -> dict:
+    """Per-turn TTFB for the timeline. ``ttfb_ms`` = end-of-speech → first byte (total,
+    server-side); ``model_ms`` = the ACTIVITY_END → first-byte slice (Gemini's own latency;
+    total minus the bridge hangover)."""
+    return {
+        "type": "turn_ttfb",
+        "agent_id": agent_id,
+        "ttfb_ms": ttfb_ms,
+        "model_ms": model_ms,
+        "ts": _ts(),
+    }
+
+
 def tool_result(*, agent_id: str, tool_name: str, call_id: str, status: str, content: str) -> dict:
     return {
         "type": "tool_result",

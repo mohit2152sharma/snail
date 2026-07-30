@@ -9,6 +9,7 @@ export const EVENT_TYPES = Object.freeze({
   INTERRUPTED: "interrupted",
   GO_AWAY: "go_away",
   ACTIVE_AGENT_CHANGED: "active_agent_changed",
+  TURN_TTFB: "turn_ttfb",
   ERROR: "error",
 });
 

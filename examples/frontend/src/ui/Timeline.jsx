@@ -7,6 +7,7 @@ function summarize(ev) {
     case "tool_call": return `${ev.agent_id} → ${ev.tool_name}(${JSON.stringify(ev.args)})`;
     case "tool_result": return `${ev.tool_name} = [${ev.status}] ${ev.content}`;
     case "active_agent_changed": return `active → ${ev.agent_id}`;
+    case "turn_ttfb": return `⚡ TTFB ${ev.agent_id}: ${ev.ttfb_ms} ms total = ${ev.ttfb_ms - ev.model_ms} ms hangover + ${ev.model_ms} ms Gemini (server-side; you hear it + downlink later)`;
     case "go_away": return `go_away (${ev.time_left_ms}ms left)`;
     case "error": return `error ${ev.code}: ${ev.message}`;
     default: return ev.type;
