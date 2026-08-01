@@ -17,7 +17,6 @@ it is fully testable against :class:`MockVendorAdapter`.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 from collections.abc import Awaitable, Callable
 
@@ -29,7 +28,7 @@ from snail.router import (
     RoutingEventKind,
     RoutingSignal,
 )
-from snail.tools import ToolRegistry, ToolResult, ToolStatus, validate
+from snail.tools import ToolRegistry, ToolResult, ToolStatus, execute
 from snail.vendor import (
     AgentTranscript,
     GoAway,
@@ -170,10 +169,7 @@ class Session:
         )
         await self._send(
             self._adapter.serialize_tool_result(
-                call_id=call_id,
-                name=name,
-                content=content,
-                meta={"status": result.status.value},
+                call_id=call_id, name=name, payload=result.to_payload()
             )
         )
         self._route(
@@ -186,31 +182,22 @@ class Session:
         )
 
     async def _invoke_guarded(
-        self, tool, args: dict
+        self, tool, args: dict, ctx=None
     ) -> tuple[ToolResult, Exception | None]:
+        """Apply the per-tool budget around the one authoritative envelope executor.
+
+        The envelope itself lives in :func:`snail.tools.execute` — the session used to
+        keep a second copy, which is exactly how a one-shot path and a blocking path
+        drift apart (docs 14).
+        """
         if tool.timeout_s is not None:
             try:
-                return await asyncio.wait_for(self._invoke(tool, args), tool.timeout_s)
+                return await asyncio.wait_for(
+                    execute(tool, args, ctx=ctx), tool.timeout_s
+                )
             except asyncio.TimeoutError:
                 return ToolResult.timeout(), None
-        return await self._invoke(tool, args)
-
-    async def _invoke(self, tool, args: dict) -> tuple[ToolResult, Exception | None]:
-        err = validate(args, tool.input_schema)
-        if err is not None:
-            return ToolResult.invalid_args(err), None
-        try:
-            r = tool.handler(args)
-            if inspect.isawaitable(r):
-                r = await r
-        except asyncio.CancelledError:
-            raise  # cooperative cancel (barge-in/handoff) — let it propagate
-        except Exception as exc:  # noqa: BLE001 - envelope boundary
-            return ToolResult.error(f"{tool.name} failed"), exc
-        out_err = validate(r, tool.output_schema)
-        if out_err is not None:
-            return ToolResult.invalid_output(), AssertionError(out_err)
-        return ToolResult.success(r), None
+        return await execute(tool, args, ctx=ctx)
 
     @staticmethod
     def _result_content(result: ToolResult) -> str:

@@ -92,33 +92,33 @@ def _tool(handler, in_s=_OBJ, out_s=None) -> Tool:
     )
 
 
-def test_execute_success() -> None:
-    res, exc = execute(_tool(lambda a: {"ok": True}), {"acct": 1})
+async def test_execute_success() -> None:
+    res, exc = await execute(_tool(lambda a: {"ok": True}), {"acct": 1})
     assert res.status is ToolStatus.SUCCESS
     assert res.data == {"ok": True}
     assert exc is None
 
 
-def test_execute_invalid_args() -> None:
-    res, exc = execute(_tool(lambda a: {}), {})  # missing required acct
+async def test_execute_invalid_args() -> None:
+    res, exc = await execute(_tool(lambda a: {}), {})  # missing required acct
     assert res.status is ToolStatus.INVALID_ARGS
     assert res.retriable is True
     assert "acct" in res.reason
 
 
-def test_execute_handler_raise_is_sanitized() -> None:
+async def test_execute_handler_raise_is_sanitized() -> None:
     def boom(a):
         raise RuntimeError("secret stack detail")
 
-    res, exc = execute(_tool(boom), {"acct": 1})
+    res, exc = await execute(_tool(boom), {"acct": 1})
     assert res.status is ToolStatus.ERROR
     assert "secret" not in (res.reason or "")  # sanitized
     assert isinstance(exc, RuntimeError)  # raw exc returned for log-only
 
 
-def test_execute_invalid_output() -> None:
+async def test_execute_invalid_output() -> None:
     # handler returns a string but output_schema wants an object
-    res, exc = execute(_tool(lambda a: "nope"), {"acct": 1})
+    res, exc = await execute(_tool(lambda a: "nope"), {"acct": 1})
     assert res.status is ToolStatus.INVALID_OUTPUT
     assert exc is not None  # detail captured for the log, not the model
 

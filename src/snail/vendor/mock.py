@@ -146,14 +146,13 @@ class MockVendorAdapter:
         return msg
 
     def serialize_tool_result(
-        self, *, call_id: str, name: str, content: str, meta: dict | None = None
+        self, *, call_id: str, name: str, payload: dict
     ) -> dict:
         msg = {
             "type": "tool_result",
             "call_id": call_id,
             "name": name,
-            "content": content,
-            "meta": meta,
+            "payload": payload,
         }
         self.sent_tool_results.append(msg)
         return msg

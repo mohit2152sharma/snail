@@ -13,6 +13,8 @@ from typing import Any
 
 import msgspec
 
+from .input_required import InputRequired
+
 
 class ToolStatus(enum.Enum):
     SUCCESS = "success"
@@ -24,6 +26,9 @@ class ToolStatus(enum.Enum):
     INVALID_OUTPUT = "invalid_output"
     NOT_FOUND = "not_found"
     CANCELLED = "cancelled"
+    #: Terminal for the *call*, intermediate for the *run* (docs 14). The run stays in
+    #: its agent's slot; the model asks the user and answers via ``provide_input``.
+    INPUT_REQUIRED = "input_required"
     DEFERRED = "deferred"  # deferred feature (async late-resolve) — docs 07/09§A
 
 
@@ -72,6 +77,39 @@ class ToolResult(msgspec.Struct, frozen=True, kw_only=True):
     retriable: bool = False
     response_mode: ResponseMode = ResponseMode.SILENT
     speak_directive: SpeakDirective | None = None
+    #: ``input_required`` only: what the blocked run is waiting for (docs 14).
+    pending: InputRequired | None = None
+    #: ``input_required`` only: the tool that blocked. Kept so the model has context
+    #: for the question it is about to ask, and echoes it back on ``provide_input``.
+    for_tool: str | None = None
+
+    # --- the wire payload -------------------------------------------------
+
+    def to_payload(self) -> dict:
+        """The model-facing object placed in the vendor's function-response.
+
+        The single authority on what a result looks like on the wire. Adapters
+        serialize this dict verbatim; they neither add nor drop fields (docs 03's
+        sanitization boundary is applied here, once, for every vendor).
+        """
+        payload: dict = {"status": self.status.value}
+        if self.status is ToolStatus.INPUT_REQUIRED:
+            p = self.pending
+            if p is not None:
+                payload["for_tool"] = self.for_tool
+                payload["key"] = p.key
+                payload["expects"] = p.expects
+                payload["ask"] = p.ask
+            return payload
+        if self.status is ToolStatus.SUCCESS:
+            if self.data is not None:
+                payload["data"] = self.data
+            return payload
+        if self.reason is not None:
+            payload["reason"] = self.reason
+        if self.retriable:
+            payload["retriable"] = True
+        return payload
 
     # --- constructors applying the default cascade ---
 
@@ -139,6 +177,21 @@ class ToolResult(msgspec.Struct, frozen=True, kw_only=True):
     @classmethod
     def cancelled(cls, reason: str | None = None) -> "ToolResult":
         return cls._nonsuccess(ToolStatus.CANCELLED, reason, speak=False)
+
+    @classmethod
+    def input_required(cls, for_tool: str, pending: InputRequired) -> "ToolResult":
+        """Close this *call* while the *run* stays blocked (docs 14).
+
+        Speaks by construction: the whole point is to make the model ask. ``ask`` is
+        the directive — a hint, so the model phrases it in its own voice.
+        """
+        return cls(
+            status=ToolStatus.INPUT_REQUIRED,
+            for_tool=for_tool,
+            pending=pending,
+            response_mode=ResponseMode.SPEAK,
+            speak_directive=SpeakDirective(text=pending.ask) if pending.ask else None,
+        )
 
     @classmethod
     def _nonsuccess(

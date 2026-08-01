@@ -81,7 +81,7 @@ async def test_tool_call_success_flow() -> None:
     assert len(sent) == 1
     assert sent[0]["type"] == "tool_result"
     assert sent[0]["call_id"] == "c1"
-    assert sent[0]["content"] == json.dumps({"balance": 42})
+    assert sent[0]["payload"] == {"status": "success", "data": {"balance": 42}}
     types = [e.type for e in ctx["log"]]
     assert EventType.TOOL_CALL in types and EventType.TOOL_RESULT in types
 
@@ -90,7 +90,7 @@ async def test_unknown_tool_returns_not_found() -> None:
     session, ctx = _wire()
     await session.handle_event(ToolCallRequest(call_id="c1", name="ghost", args={}))
     await session.drain_tools()
-    assert ctx["sent"][0]["meta"]["status"] == ToolStatus.NOT_FOUND.value
+    assert ctx["sent"][0]["payload"]["status"] == ToolStatus.NOT_FOUND.value
 
 
 async def test_async_handler_awaited() -> None:
@@ -103,7 +103,7 @@ async def test_async_handler_awaited() -> None:
     session, ctx = _wire(tools=tools)
     await session.handle_event(ToolCallRequest(call_id="c1", name="a", args={}))
     await session.drain_tools()
-    assert ctx["sent"][0]["content"] == json.dumps({"ok": True})
+    assert ctx["sent"][0]["payload"] == {"status": "success", "data": {"ok": True}}
 
 
 async def test_tool_timeout() -> None:
@@ -116,7 +116,7 @@ async def test_tool_timeout() -> None:
     session, ctx = _wire(tools=tools)
     await session.handle_event(ToolCallRequest(call_id="c1", name="slow", args={}))
     await session.drain_tools()
-    assert ctx["sent"][0]["meta"]["status"] == ToolStatus.TIMEOUT.value
+    assert ctx["sent"][0]["payload"]["status"] == ToolStatus.TIMEOUT.value
 
 
 async def test_tool_result_drives_routing_handoff() -> None:

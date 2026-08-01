@@ -173,18 +173,27 @@ structured fields rather than a flattened string:
 `ask` is where all runtime dynamism lives — it never needs to appear in any schema.
 `response_mode: SPEAK`, with the ask as the directive.
 
-## The slot — latest always wins
+## The slots — one run per agent, latest always wins
 
-The executor holds **one run**. Not a table, not a queue.
+An agent can only be doing one thing at a time, so the executor holds **one run per
+agent**. A newer tool call from that agent displaces whatever it was doing. Multi-agent
+sessions run several concurrently; **displacement never crosses agents**.
 
 ```
-active_run:
+RunSlots: agent_id → ToolRun
+
+ToolRun:
     run_id            # internal only; for log correlation, nothing looks it up
+    agent_id          # which agent owns this run
     tool_name
-    state             # executing | blocked
+    state             # executing | blocked | done | cancelled
     pending           # the InputRequired, while blocked
     carrier_call_id   # which call receives the next output; None between outputs
 ```
+
+The agent scoping is also what makes correlation robust: **the connection a call
+arrives on names the agent**, and that agent has at most one blocked run. So a submitted
+value has exactly one candidate without the model tracking anything.
 
 ```mermaid
 stateDiagram-v2
@@ -200,19 +209,23 @@ stateDiagram-v2
 
 ### Locked rules
 
-1. **Any tool call that is not `provide_input` takes the slot.** Whatever was there —
-   executing or blocked — is cancelled. This holds uniformly: within a turn, across
-   turns, always. The latest thing the user asked for is the only thing that matters.
-2. **`provide_input` never takes the slot.** Blocked slot → feed the value and resume.
-   Empty slot, or slot executing → `skipped`.
+1. **Any tool call that is not `provide_input` takes that agent's slot.** Whatever that
+   agent had — executing or blocked — is cancelled. Holds uniformly: within a turn,
+   across turns, always. Other agents are untouched.
+2. **`provide_input` never takes a slot.** It binds to the blocked run of the agent whose
+   connection it arrived on. That agent has nothing blocked → `skipped`.
 3. **A finished run** closes its carrier call with the result and empties the slot.
 4. **A blocked run** closes its carrier call with `input_required` and keeps the slot.
    `carrier_call_id` becomes `None` until the next call arrives.
 5. **A cancelled run's carrier call, if still open, is closed with `skipped`.** Gemini is
    waiting on that `tool_call_id`; it must be answered. This upholds 04's one-result
    invariant — nothing is left hanging.
-6. **Key mismatch → `skipped`.** The value is discarded; the blocked run is left
-   untouched and still answerable.
+6. **`for_tool` or key mismatch → `skipped`.** The value is discarded; the blocked run is
+   left untouched and still answerable. A wrong answer never costs the user the chance to
+   give the right one.
+
+`for_tool` is **retained**: it gives the model context for the question it is asking, and
+it lets a stale answer be rejected rather than misapplied.
 
 ### "Silently" means silent, not invisible
 
@@ -392,9 +405,10 @@ tool_result  fc_2  success
   `scheduling` and OpenAI via injected item + `response.create`. `Tool.non_blocking`
   (live, used at `vendor/gemini.py:174`) and `PendingCall.schedule` (unused) are reserved
   for it. Not v1.
-- **Concurrent runs / queued questions.** Latest-wins makes at most one run exist. The
-  cost is real: two tool calls in one model response means the first is skipped and the
-  user silently loses half of what they asked for. Accepted.
+- **Concurrent runs within one agent.** Latest-wins makes at most one run exist per
+  agent. The cost is real: two tool calls in one model response from the same agent means
+  the first is skipped and the user silently loses half of what they asked for. Accepted.
+  Across agents there is no such limit.
 - **Restart durability.** A voice session dies with its websocket; serializable run state
   buys nothing. Inspectability comes from the event log instead.
 - **Topic-change classification.** Rule 1 is purely structural — any non-`provide_input`
@@ -403,51 +417,55 @@ tool_result  fc_2  success
 
 ## Impact on existing code
 
-### Added
+### Built
 
-| Change | Where |
+| Piece | Where |
 |---|---|
-| `ToolStatus.INPUT_REQUIRED` | `tools/result.py` |
-| `InputRequired`, `ToolRun`, the slot, `ctx.require` | `registry/` (beside `PendingCall`) |
-| slot branch in dispatch; run resume path | `session/session.py:141` `_run_tool` |
-| `provide_input` registration | `tools/registry.py` — **not** routed through the Router; it is a resume, not authority or handoff |
-| **structured** tool responses | `vendor/` — `serialize_tool_result` takes `content: str` and `session.py:211` flattens via `_result_content`; `input_required` needs named fields in `response` |
+| `InputRequired` | `tools/input_required.py` |
+| `ToolStatus.INPUT_REQUIRED`, `ToolResult.input_required()`, `ToolResult.to_payload()` | `tools/result.py` |
+| `ToolContext.require()` | `tools/context.py` |
+| `Tool.requires`, `Tool.declared`, `Tool.takes_context` | `tools/tool.py` |
+| `ToolRun`, `RunState`, `RunSlots`, `SubmitOutcome` | `registry/run.py` |
 | `EventType.TOOL_RUN` | `context/events.py` |
 
-### Removable — proposed, pending decision
+Two consolidations landed with it:
 
-| Delete | Why it becomes dead |
+**One authoritative executor.** `tools/executor.py:execute()` is now async,
+context-aware, and the only path that runs a handler. `Session._invoke` — a second copy
+of the same envelope — is gone; `_invoke_guarded` now just wraps `execute` in the
+per-tool budget. Suspension is invisible to it: a handler awaiting `ctx.require(...)`
+simply parks that coroutine.
+
+**One wire payload.** `ToolResult.to_payload()` is the single authority on what the model
+sees, and adapters place it verbatim. `serialize_tool_result` takes `payload: dict`
+instead of `content: str` + a `meta` the Gemini adapter silently dropped — which meant
+`status` and `retriable` never reached the model at all, contrary to doc 03. Fixed on the
+way through.
+
+### Still to wire (loop-bound / vendor-facing, not primitives)
+
+- session dispatch: take the slot, close the displaced carrier with `skipped`, emit
+  `input_required`, route `provide_input` to `RunSlots.submit`
+- the `provide_input` tool declaration and its setup-time `key` enum
+- `TOOL_RUN` event emission at each transition
+- `sweep_expired` pumped from the session clock
+
+### Kept, by decision
+
+- **Response-group machinery** — valid in the multi-agent architecture; barge-in scoping
+  still needs it. Not deleted.
+- **`for_tool`** — see rule 6.
+
+### Still proposed for deletion
+
+| Delete | Why it is dead |
 |---|---|
 | `CallState.AWAITING_EXTERNAL` (`registry/pending.py:26`) | the call never waits; it closes immediately with `input_required`. This state was for the hold-the-call-open approach we rejected |
-| `Destination.DEFERRED_EXTERNAL` (`registry/pending.py:44`) | no reference anywhere |
-| response-group machinery — `_by_group`, `response_group_id`, `sweep_response_group`, `group_size`, `group_call_ids`, `_group_counter`, `_current_group` (registry + session + `router.py:219`) | groups answer "which calls belong to this model response". Latest-wins makes one run exist, so barge-in cancels *the* run. Real capability loss (doc 04's batch-completion detection) but already unreachable. Tests: `test_call_registry.py:77-83`, `test_router.py:165-168` |
-| `_tool_tasks: dict` (`session.py:75`) | one run → one task reference |
-| `ToolStatus.DEFERRED` (`result.py:27`) | unused, and now sits confusingly beside `INPUT_REQUIRED`. Either delete until the machine-factor path lands, or document the split: `DEFERRED` keeps the call open, `INPUT_REQUIRED` closes it |
-
-`_by_conn` stays — handoff still needs it. `Tool.non_blocking` stays — live in the Gemini
-adapter.
-
-### Pre-existing duplication worth fixing first
-
-`tools/executor.py:execute()` and `Session._invoke()` (`session.py:194`) implement the
-same envelope: validate args → run handler → validate output → wrap. `execute()`'s
-docstring calls itself *"the pure, testable core they wrap"*, but nothing wraps it — it is
-imported only by `tools/__init__.py` and exercised only by `test_tools.py:96-121`.
-Production runs the copy in the session.
-
-Adding runs makes a third path through the same logic. Collapse to one async-capable
-envelope before building on it, or the run path drifts from the one-shot path the first
-time either is touched.
+| `Destination` enum (`registry/pending.py:38`) | `session.py` never passes `destination`; nothing reads it |
+| `PendingCall.schedule` | never read; belongs to the deferred machine-factor path |
+| `ToolStatus.DEFERRED` (`result.py`) | unused, and sits confusingly beside `INPUT_REQUIRED`. Delete, or document the split: `DEFERRED` keeps the call open, `INPUT_REQUIRED` closes it |
 
 ## Open items
-
-**O1 — drop `for_tool`.** `key` already identifies the blocked run, and the executor
-knows which tool declared it. `for_tool` can only *reject a correct answer*: if
-`location_permission` is declared by both `get_weather` and `book_cab`, and `get_weather`
-is displaced by `book_cab` which blocks on the same key, the model may still echo
-`for_tool: "get_weather"` — right answer, right key, rejected on a field that contributed
-nothing. Removing it drops one model-filled field, one rejection reason, and one line of
-system instruction.
 
 **O2 — value typing.** Option A (above): one `provide_input`, three typed optional slots.
 Option B: `provide_bool` / `provide_text` / `provide_number`, each with a single required
@@ -483,5 +501,6 @@ Stated plainly, because the machinery can look stronger than it is.
 - **That the model asks what we asked it to ask.** Speech-to-speech models paraphrase and
   drift; doc 03 already flags this for `verbatim` directives.
 
-What it *does* guarantee: exactly one candidate run for any incoming value, exactly one
-response per `tool_call_id`, and no executor state that a model mistake can corrupt.
+What it *does* guarantee: exactly one candidate run per agent for any incoming value,
+exactly one response per `tool_call_id`, and no executor state that a model mistake can
+corrupt — every rejection path leaves the run blocked and still answerable.

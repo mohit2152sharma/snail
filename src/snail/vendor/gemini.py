@@ -253,15 +253,16 @@ class GeminiAdapter:
         }
 
     def serialize_tool_result(
-        self, *, call_id: str, name: str, content: str, meta: dict | None = None
+        self, *, call_id: str, name: str, payload: dict
     ) -> types.FunctionResponse:
         """Serialize a tool result to a Gemini ``FunctionResponse``.
 
-        The connection layer sends it via ``session.send_tool_response(...)``.
+        The connection layer sends it via ``session.send_tool_response(...)``. The
+        payload goes in verbatim — previously this flattened everything to a single
+        ``result`` string, which silently dropped ``status``/``retriable`` and left
+        no room for the structured ``input_required`` fields (docs 14).
         """
-        return types.FunctionResponse(
-            id=call_id, name=name, response={"result": content}
-        )
+        return types.FunctionResponse(id=call_id, name=name, response=payload)
 
     # --- inbound event parsing -------------------------------------------
 

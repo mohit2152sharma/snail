@@ -104,9 +104,12 @@ def test_serialize_items() -> None:
 
 
 def test_serialize_tool_result() -> None:
-    fr = _dev().serialize_tool_result(call_id="c1", name="f", content="ok")
+    fr = _dev().serialize_tool_result(
+        call_id="c1", name="f", payload={"status": "success", "data": {"t": 31}}
+    )
     assert fr.id == "c1" and fr.name == "f"
-    assert fr.response == {"result": "ok"}
+    # payload goes in verbatim — no flattening, nothing dropped (docs 14)
+    assert fr.response == {"status": "success", "data": {"t": 31}}
 
 
 def test_serialize_realtime_multimodal() -> None:
