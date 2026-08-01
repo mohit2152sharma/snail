@@ -20,7 +20,7 @@ from backend.bridge import MultiAgentBridge  # noqa: E402
 from backend.agents import HOST_ID  # noqa: E402
 
 from snail.audio.opus_codec import OpusCodec  # noqa: E402
-from snail.vendor import RealtimeControl  # noqa: E402
+from snail.vendor import RealtimeControl, UserSpeechEnd, UserSpeechStart  # noqa: E402
 
 
 class FakeCaps:
@@ -170,3 +170,43 @@ async def test_ttfb_armed_at_end_speech():
     await bridge._pump_client()
     assert bridge._ttfb_pending is True
     assert bridge._ttfb_t0 is not None
+
+
+@pytest.mark.asyncio
+async def test_auto_vad_ignores_the_local_endpointer():
+    """Under vendor VAD the local VAD must not stamp the TTFB clock.
+
+    It endpoints on a different rule than the one that actually ended the turn — at the
+    shipped 10ms hangover it fires on any inter-word gap, freezing t0 seconds before the
+    user stopped. Live logs showed 2.4-6.0s of inflation from exactly this.
+    """
+    bridge, sock, conn = await _make_bridge()
+    conn.adapter.manual_activity = False
+    seq = _arc(OpusCodec(), [("sil", 15), ("speech", 22), ("sil", 35)])
+    sock.inbox = [{"type": "x", "bytes": b} for b in seq]
+    await bridge._pump_client()
+
+    assert bridge._ttfb_pending is False
+    assert bridge._ttfb_t0 is None
+    assert not conn.realtime_controls  # and no markers into an auto-VAD session
+    assert "speech_end" not in "".join(sock.sent_text)
+
+
+@pytest.mark.asyncio
+async def test_vendor_speech_end_arms_ttfb():
+    """The vendor's own boundary is what arms the clock under auto VAD."""
+    bridge, sock, conn = await _make_bridge()
+    conn.adapter.manual_activity = False
+
+    on_msg = bridge._make_on_msg(HOST_ID)
+    conn.adapter.parse_event = lambda raw: [UserSpeechStart()]
+    await on_msg(object())
+    assert bridge._ttfb_pending is False  # start alone arms nothing
+
+    conn.adapter.parse_event = lambda raw: [UserSpeechEnd()]
+    await on_msg(object())
+    assert bridge._ttfb_pending is True
+    assert bridge._ttfb_t0 is not None
+
+    sent = "".join(sock.sent_text)
+    assert "speech_start" in sent and "speech_end" in sent

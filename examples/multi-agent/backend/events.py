@@ -58,7 +58,10 @@ def to_client_json(ev, *, agent_id: str) -> dict | None:
         return {"type": "interrupted", "agent_id": agent_id, "ts": _ts()}
     if isinstance(ev, GoAway):
         return {"type": "go_away", "time_left_ms": ev.time_left_ms, "ts": _ts()}
-    return None  # ResumptionUpdate, VendorError handled elsewhere / skipped
+    # ResumptionUpdate / VendorError are handled elsewhere. UserSpeechStart /
+    # UserSpeechEnd are emitted by the bridge itself, which has to stamp the TTFB clock
+    # at the same instant and so cannot route them through here.
+    return None
 
 
 #: Log types the vendor stream cannot supply. TOOL_CALL / speech are excluded because

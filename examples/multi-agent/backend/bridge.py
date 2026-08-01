@@ -59,6 +59,8 @@ from snail.vendor import (
     RealtimeControl,
     ResponseModality,
     TurnComplete,
+    UserSpeechEnd,
+    UserSpeechStart,
 )
 
 from .agents import ECHO_ID, HOST_ID, POOL_KEY, REANCHOR, SPECS, TRANSLATE_ID
@@ -376,11 +378,17 @@ class MultiAgentBridge:
             data = msg.get("bytes")
             if data is not None:
                 if not self._muted:
+                    # The local VAD is kept fed unconditionally (its noise floor has to
+                    # track the room whether or not anyone is asking it), but under an
+                    # auto-VAD agent nobody consumes its verdict: the vendor endpoints
+                    # the turn and reports the boundary itself.
+                    manual = self._manual_active()
                     for f in self._pipeline.on_client_audio(data):
                         ev = self._vad.push(f)
                         if ev is VadEvent.START:
                             self._in_speech = True
-                            await self._emit(speech("speech_start"))
+                            if manual:
+                                await self._emit(speech("speech_start"))
                         elif ev is VadEvent.END:
                             await self._end_speech()
                     await self._forward_drained()
@@ -455,26 +463,42 @@ class MultiAgentBridge:
                 self._mic_logged = self._mic_bytes
 
     async def _end_speech(self) -> None:
-        """Local VAD END: close the user turn (manual mode) and arm the TTFB timer.
+        """Local VAD END: close the user turn and arm the TTFB timer — manual mode only.
 
         ``t0`` is the last speech frame (END fires exactly ``hangover`` after it), so the
         logged latency is the full end-of-speech→first-byte window.
 
-        Under Gemini's own VAD the bridge sends no markers, but the local energy VAD is
-        still running and still knows where the user stopped talking — so it is used as
-        the TTFB reference. The number then measures the same window and stays
-        comparable, with Gemini's ``silence_duration_ms`` included in it rather than
-        the bridge's hangover.
+        Under an auto-VAD agent this returns early. It used to arm the timer there too,
+        on the theory that the local VAD "still knows where the user stopped" — it does
+        not. Its endpointer is not the one that ended the turn, and at the aggressive
+        hangover this bridge runs (10ms) it fires on any inter-word gap, freezing ``t0``
+        seconds before the user finished. Live logs showed the resulting TTFB inflated by
+        2.4–6.0s. The vendor reports its own boundary now (:meth:`_on_vendor_speech_end`).
         """
         self._in_speech = False
         # discard any sub-threshold buffered segment that never opened an activity
         self._seg_bytes = 0
         self._preroll.clear()
-        if self._activity_open:  # manual mode: only arm for a turn we actually opened
-            await self._close_activity()
-        elif self._manual_active():
-            return  # manual mode, nothing was open → not a real turn
+        if not self._manual_active():
+            return  # the vendor owns endpointing *and* the TTFB reference
+        if not self._activity_open:
+            return  # nothing was open → not a real turn
+        await self._close_activity()
         self._ttfb_t0 = time.monotonic() - self._hangover_s
+        self._ttfb_pending = True
+        await self._emit(speech("speech_end"))
+
+    async def _on_vendor_speech_end(self) -> None:
+        """Vendor VAD committed end-of-speech: the turn is the model's from here.
+
+        Arrival time, not the moment Gemini decided — ``VoiceActivity.audio_offset`` is
+        documented but never populated, so one network hop (tens of ms) is baked in.
+
+        What this measures is deliberately *not* the old number. It starts after the
+        vendor's ``silence_duration_ms`` window has already elapsed, so it excludes the
+        endpointing wait and reports what the model is actually answerable for.
+        """
+        self._ttfb_t0 = time.monotonic()
         self._ttfb_pending = True
         await self._emit(speech("speech_end"))
 
@@ -547,17 +571,22 @@ class MultiAgentBridge:
             for ev in parsed:
                 if isinstance(ev, Interrupted):
                     self._pipeline.cut()
-                # TTFB is armed at ACTIVITY_END (_end_speech); disarm on turn end so a
-                # stale timer can't fire against the next turn.
-                if self._router.active_id == cid and isinstance(ev, TurnComplete):
-                    self._ttfb_pending = False
+                if self._router.active_id == cid:
+                    # Vendor VAD boundaries. Only the token holder's count — a demoted
+                    # agent still hears the mic and would otherwise stamp t0 for a turn
+                    # the user is not having with it.
+                    if isinstance(ev, UserSpeechStart):
+                        await self._emit(speech("speech_start"))
+                    elif isinstance(ev, UserSpeechEnd):
+                        await self._on_vendor_speech_end()
+                    # TTFB is armed at end-of-speech; disarm on turn end so a stale
+                    # timer can't fire against the next turn.
+                    elif isinstance(ev, TurnComplete):
+                        self._ttfb_pending = False
                 j = to_client_json(ev, agent_id=cid)
                 if j is not None:
-                    txt = j.get("text")
-                    if txt is not None:
-                        log.info("event %s from %s: %r", j["type"], cid, txt[:80])
-                    else:
-                        log.info("event %s from %s", j["type"], cid)
+                    # No log line here: `_emit` logs every client event in full, and a
+                    # summary alongside it would just be a lossier duplicate.
                     await self._emit(j)
             await session.on_events(parsed)  # was on_vendor_raw(raw) — no second parse
 
@@ -602,6 +631,11 @@ class MultiAgentBridge:
     async def _emit(self, obj: dict) -> None:
         if self._closing:
             return
+        # Every client event passes through here, so logging here is what makes the
+        # backend log a faithful record of what the UI was shown — the timeline becomes
+        # reconstructable from the log alone, which a browser tab is not. Audio does not
+        # come through this path (it is sent as binary frames), so this cannot flood.
+        log.info("→client %s", json.dumps(obj, default=str))
         try:
             await self._socket.send_text(json.dumps(obj))
         except Exception:  # noqa: BLE001 - client gone mid-send

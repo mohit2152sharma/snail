@@ -33,6 +33,9 @@ class TranslateGeminiAdapter(GeminiAdapter):
             response_modalities=[types.Modality.AUDIO],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            # Built from scratch, so it has to opt in to the server's VAD signals by
+            # hand — without them this agent reports no end-of-speech and no TTFB.
+            explicit_vad_signal=True,
             translation_config=types.TranslationConfig(
                 target_language_code=self._target,
                 echo_target_language=False,

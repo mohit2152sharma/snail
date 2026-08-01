@@ -20,6 +20,8 @@ from snail.vendor import (
     ToolCallRequest,
     ToolSpec,
     TurnComplete,
+    UserSpeechEnd,
+    UserSpeechStart,
     UserTranscript,
     VendorAdapter,
 )
@@ -162,6 +164,41 @@ def test_parse_event_transcripts_and_control() -> None:
     assert AgentTranscript(text="hi", is_final=False) in evs
     assert any(isinstance(e, Interrupted) for e in evs)
     assert any(isinstance(e, TurnComplete) for e in evs)
+
+
+def test_build_setup_asks_for_server_vad_signals() -> None:
+    """Auto-VAD adapters opt in; manual ones don't (they declared the boundary)."""
+    setup = SetupParam(model="gemini-2.5-flash-live")
+    assert _dev().build_setup(setup).explicit_vad_signal is True
+
+    class Manual(GeminiAdapter):
+        manual_activity = True
+
+    assert Manual(backend=Backend.GEMINI_DEV).build_setup(setup).explicit_vad_signal is None
+
+
+def test_parse_event_voice_activity() -> None:
+    """The only end-of-speech marker on the wire — nothing else reports the boundary."""
+    a = _dev()
+    start = types.LiveServerMessage(
+        voice_activity=types.VoiceActivity(
+            voice_activity_type=types.VoiceActivityType.ACTIVITY_START
+        )
+    )
+    end = types.LiveServerMessage(
+        voice_activity=types.VoiceActivity(
+            voice_activity_type=types.VoiceActivityType.ACTIVITY_END
+        )
+    )
+    assert a.parse_event(start) == [UserSpeechStart()]
+    assert a.parse_event(end) == [UserSpeechEnd()]
+
+    unspecified = types.LiveServerMessage(
+        voice_activity=types.VoiceActivity(
+            voice_activity_type=types.VoiceActivityType.TYPE_UNSPECIFIED
+        )
+    )
+    assert a.parse_event(unspecified) == []
 
 
 def test_parse_event_tool_call_goaway_resumption() -> None:

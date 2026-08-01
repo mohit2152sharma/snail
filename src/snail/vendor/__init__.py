@@ -16,6 +16,8 @@ from .events import (
     ResumptionUpdate,
     ToolCallRequest,
     TurnComplete,
+    UserSpeechEnd,
+    UserSpeechStart,
     UserTranscript,
     VendorError,
 )
@@ -51,6 +53,8 @@ __all__ = [
     "ToolCallRequest",
     "TurnComplete",
     "Interrupted",
+    "UserSpeechStart",
+    "UserSpeechEnd",
     "GoAway",
     "ResumptionUpdate",
     "VendorError",

@@ -43,6 +43,29 @@ class Interrupted(msgspec.Struct, frozen=True, kw_only=True):
     """
 
 
+class UserSpeechStart(msgspec.Struct, frozen=True, kw_only=True):
+    """Vendor VAD committed start-of-speech (server-side endpointing).
+
+    Only vendors running their *own* activity detection can report this, and only when
+    asked to: Gemini keeps these signals off unless ``explicit_vad_signal`` is set on
+    the live config, which is why the framework enables it for auto-VAD adapters.
+    """
+
+
+class UserSpeechEnd(msgspec.Struct, frozen=True, kw_only=True):
+    """Vendor VAD committed end-of-speech — the turn is the model's now.
+
+    This is the only trustworthy end-of-speech reference under vendor VAD. Nothing else
+    on the wire marks it: the final input transcript arrives *after* generation has
+    already started, so it is a consequence of the turn ending, not the boundary.
+
+    It fires one ``silence_duration_ms`` window *after* the user actually stopped, so a
+    latency measured from here excludes the endpointing wait by construction. That is a
+    different quantity from "the user stopped → first byte", and the honest one to
+    attribute to the model.
+    """
+
+
 class GoAway(msgspec.Struct, frozen=True, kw_only=True):
     """Vendor is about to terminate the session (Gemini). Recycle now."""
 
@@ -69,6 +92,8 @@ ParsedEvent = (
     | ToolCallRequest
     | TurnComplete
     | Interrupted
+    | UserSpeechStart
+    | UserSpeechEnd
     | GoAway
     | ResumptionUpdate
     | VendorError
