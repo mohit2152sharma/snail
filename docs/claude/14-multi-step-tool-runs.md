@@ -426,6 +426,7 @@ tool_result  fc_2  success
 | `ToolContext.require()` | `tools/context.py` |
 | `Tool.requires`, `Tool.declared`, `Tool.takes_context` | `tools/tool.py` |
 | `ToolRun`, `RunState`, `RunSlots`, `SubmitOutcome` | `registry/run.py` |
+| `provide_input` declaration, slot extraction, `PROVIDE_INPUT_INSTRUCTION` | `tools/provide_input.py` |
 | `EventType.TOOL_RUN` | `context/events.py` |
 
 Two consolidations landed with it:
@@ -442,11 +443,12 @@ instead of `content: str` + a `meta` the Gemini adapter silently dropped — whi
 `status` and `retriable` never reached the model at all, contrary to doc 03. Fixed on the
 way through.
 
-### Still to wire (loop-bound / vendor-facing, not primitives)
+### Still to wire (loop-bound, not primitives)
 
 - session dispatch: take the slot, close the displaced carrier with `skipped`, emit
-  `input_required`, route `provide_input` to `RunSlots.submit`
-- the `provide_input` tool declaration and its setup-time `key` enum
+  `input_required`, intercept `provide_input` by name and route it to `RunSlots.submit`
+- register `build_provide_input_tool(declared_keys(...))` at setup, and splice
+  `PROVIDE_INPUT_INSTRUCTION` into agent instructions
 - `TOOL_RUN` event emission at each transition
 - `sweep_expired` pumped from the session clock
 
@@ -455,6 +457,9 @@ way through.
 - **Response-group machinery** — valid in the multi-agent architecture; barge-in scoping
   still needs it. Not deleted.
 - **`for_tool`** — see rule 6.
+- **One `provide_input` with typed slots**, rather than one tool per value type. Keeps
+  the exposed surface at a single tool; the slot named by `expects` is authoritative and
+  extra filled slots are ignored rather than rejected.
 
 ### Still proposed for deletion
 
@@ -466,12 +471,6 @@ way through.
 | `ToolStatus.DEFERRED` (`result.py`) | unused, and sits confusingly beside `INPUT_REQUIRED`. Delete, or document the split: `DEFERRED` keeps the call open, `INPUT_REQUIRED` closes it |
 
 ## Open items
-
-**O2 — value typing.** Option A (above): one `provide_input`, three typed optional slots.
-Option B: `provide_bool` / `provide_text` / `provide_number`, each with a single required
-typed `value`, and `expects` disappears from the envelope because the tool name *is* the
-type. B gives the model an easier target and nothing optional; A keeps the surface at one
-tool.
 
 **O3 — structured answers.** Three primitive slots do not cover an address or a list. The
 escape hatch is JSON inside `text_value`, parsed and validated server-side — unlimited

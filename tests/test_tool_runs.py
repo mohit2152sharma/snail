@@ -21,12 +21,18 @@ from snail.registry import (
     SubmitOutcome,
 )
 from snail.tools import (
+    PROVIDE_INPUT,
     InputRequired,
     Tool,
     ToolContext,
     ToolResult,
     ToolStatus,
+    build_provide_input_tool,
+    declared_keys,
     execute,
+    extract_value,
+    provide_input_schema,
+    validate,
 )
 
 _OBJ = {"type": "object"}
@@ -292,6 +298,84 @@ def test_budget_expiry_cancels_only_blocked_runs() -> None:
     assert blocked.state is RunState.CANCELLED
     assert slots.get("a") is None
     assert slots.get("b") is running  # an executing run has no human budget
+
+
+# --- provide_input: one tool, typed slots ------------------------------------
+
+
+def test_key_enum_is_built_from_declared_requirements() -> None:
+    weather = Tool("get_weather", lambda a, c: {}, output_schema=_OBJ, requires=(_consent(),))
+    cab = Tool(
+        "book_cab",
+        lambda a, c: {},
+        output_schema=_OBJ,
+        requires=(_consent(), InputRequired(key="payment_ok", expects="boolean")),
+    )
+    # de-duped across tools, order preserved
+    assert declared_keys([weather, cab]) == ("location_permission", "payment_ok")
+
+    schema = provide_input_schema(declared_keys([weather, cab]))
+    assert schema["properties"]["key"]["enum"] == ["location_permission", "payment_ok"]
+    assert schema["required"] == ["for_tool", "key"]
+
+
+def test_key_degrades_to_a_plain_string_with_nothing_declared() -> None:
+    schema = provide_input_schema(())
+    assert "enum" not in schema["properties"]["key"]
+    assert schema["properties"]["key"]["type"] == "string"
+
+
+def test_declared_tool_is_framework_and_accepts_a_well_formed_call() -> None:
+    tool = build_provide_input_tool(("location_permission",))
+    assert tool.name == PROVIDE_INPUT
+    assert tool.is_framework is True
+    args = {"for_tool": "get_weather", "key": "location_permission", "bool_value": True}
+    assert validate(args, tool.input_schema) is None
+
+
+def test_a_key_outside_the_enum_fails_validation() -> None:
+    tool = build_provide_input_tool(("location_permission",))
+    args = {"for_tool": "get_weather", "key": "made_up", "bool_value": True}
+    assert "not in enum" in (validate(args, tool.input_schema) or "")
+
+
+@pytest.mark.parametrize(
+    ("expects", "args", "value"),
+    [
+        ("boolean", {"bool_value": True}, True),
+        ("string", {"text_value": "Delhi"}, "Delhi"),
+        ("number", {"number_value": 31.5}, 31.5),
+        ("integer", {"number_value": 3}, 3),
+    ],
+)
+def test_value_is_read_from_the_slot_named_by_expects(
+    expects: str, args: dict, value: object
+) -> None:
+    assert extract_value(args, expects) == (value, None)
+
+
+def test_extra_slots_are_ignored_not_rejected() -> None:
+    args = {"bool_value": True, "text_value": "yes", "number_value": 1}
+    assert extract_value(args, "boolean") == (True, None)
+
+
+def test_a_missing_slot_names_the_one_to_use() -> None:
+    value, err = extract_value({"text_value": "yes"}, "boolean")
+    assert value is None
+    assert "bool_value is required" in err
+
+
+def test_wrong_slot_is_caught_end_to_end_and_leaves_the_run_blocked() -> None:
+    # model answers a boolean question in text_value → invalid_args, run still waiting
+    slots = RunSlots()
+    run, _ = slots.start("a", "get_weather")
+    promise = Promise()
+    slots.block(run, _consent(), resume=promise)
+
+    value, err = extract_value({"text_value": "yes"}, run.pending.expects)
+    assert err is not None and value is None
+    assert slots.blocked("a") is run
+    assert promise.done() is False
 
 
 def test_cancel_agent_frees_the_slot() -> None:
