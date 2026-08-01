@@ -1,19 +1,39 @@
+// src/ui/ControlsBar.jsx — session controls + a typed user turn (no mic needed).
 import React, { useState } from "react";
 
-export default function ControlsBar({ status, muted, onStart, onStop, onToggleMute, onBargeIn, onSendText }) {
+export default function ControlsBar({
+  status, muted, onStart, onStop, onToggleMute, onBargeIn, onSendText,
+}) {
   const [text, setText] = useState("");
   const live = status === "live";
+  const busy = status === "connecting";
+
   return (
-    <div style={{ display: "flex", gap: 8, padding: 8, borderBottom: "1px solid #ccc", flexWrap: "wrap", alignItems: "center" }}>
-      {live ? <button onClick={onStop}>Stop</button> : <button onClick={onStart}>Start</button>}
-      <button disabled={!live} onClick={() => onToggleMute(!muted)}>{muted ? "Unmute" : "Mute"}</button>
+    <div className="controls">
+      {live ? (
+        <button className="danger" onClick={onStop}>Stop</button>
+      ) : (
+        <button className="primary" onClick={onStart} disabled={busy}>
+          {busy ? "Connecting…" : "Start"}
+        </button>
+      )}
+      <button disabled={!live} onClick={() => onToggleMute(!muted)}>
+        {muted ? "Unmute" : "Mute"}
+      </button>
       <button disabled={!live} onClick={onBargeIn}>Barge-in</button>
-      <span style={{ marginLeft: "auto", opacity: 0.6 }}>{status}</span>
       <form
-        style={{ display: "flex", gap: 4, flexBasis: "100%" }}
-        onSubmit={(e) => { e.preventDefault(); if (text.trim()) { onSendText(text); setText(""); } }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (text.trim()) { onSendText(text); setText(""); }
+        }}
       >
-        <input style={{ flex: 1 }} placeholder="type a user turn" value={text} onChange={(e) => setText(e.target.value)} disabled={!live} />
+        <input
+          type="text"
+          placeholder="type a user turn (skips the mic)"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          disabled={!live}
+        />
         <button type="submit" disabled={!live}>Send</button>
       </form>
     </div>

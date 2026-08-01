@@ -1,19 +1,24 @@
+// src/ui/AgentPanel.jsx — who holds the token, and manual handoff.
 import React from "react";
 
-export default function AgentPanel({ agents, activeAgentId, onHandoff }) {
+export default function AgentPanel({ agents, activeAgentId, onHandoff, disabled }) {
   return (
-    <div style={{ width: 200, borderLeft: "1px solid #ccc", padding: 8 }}>
-      <h3 style={{ marginTop: 0 }}>Agents</h3>
-      {agents.map((id) => (
-        <div key={id} style={{ marginBottom: 6 }}>
-          <span style={{ fontWeight: id === activeAgentId ? "bold" : "normal" }}>
-            {id === activeAgentId ? "● " : "○ "}{id}
-          </span>
-          {id !== activeAgentId && (
-            <button style={{ marginLeft: 6 }} onClick={() => onHandoff(id)}>hand off</button>
-          )}
-        </div>
-      ))}
+    <div className="panel">
+      <h2>Agents</h2>
+      {agents.map((id) => {
+        const active = id === activeAgentId;
+        return (
+          <div className="agent-row" key={id}>
+            <span className={`pill ${active ? "agent" : ""}`}>
+              <span className="dot" />{active ? "active" : "idle"}
+            </span>
+            <span className={`name ${active ? "active" : ""}`}>{id}</span>
+            <button disabled={disabled || active} onClick={() => onHandoff(id)}>
+              hand off
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

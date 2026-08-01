@@ -1,29 +1,63 @@
-import React, { useEffect, useRef } from "react";
+// src/ui/Timeline.jsx — the scrolling event list, with kind filters.
+//
+// Auto-scroll sticks to the bottom only while the user is already there; scrolling up
+// to read a tool's arguments must not be yanked back by the next partial transcript.
+import React, { useEffect, useLayoutEffect, useRef } from "react";
+import EventRow from "./EventRow.jsx";
+import { kindOf, KINDS } from "../protocol.js";
 
-function summarize(ev) {
-  switch (ev.type) {
-    case "user_transcript": return `you: ${ev.text}${ev.is_final ? "" : " …"}`;
-    case "agent_transcript": return `${ev.agent_id}: ${ev.text}${ev.is_final ? "" : " …"}`;
-    case "tool_call": return `${ev.agent_id} → ${ev.tool_name}(${JSON.stringify(ev.args)})`;
-    case "tool_result": return `${ev.tool_name} = [${ev.status}] ${ev.content}`;
-    case "active_agent_changed": return `active → ${ev.agent_id}`;
-    case "go_away": return `go_away (${ev.time_left_ms}ms left)`;
-    case "error": return `error ${ev.code}: ${ev.message}`;
-    default: return ev.type;
+const ORDER = [KINDS.TRANSCRIPT, KINDS.TOOL, KINDS.TURN, KINDS.TIMING, KINDS.SYSTEM];
+
+export function Filters({ events, active, onToggle }) {
+  const counts = {};
+  for (const ev of events) {
+    const k = kindOf(ev);
+    counts[k] = (counts[k] ?? 0) + 1;
   }
+  return (
+    <div className="filters">
+      {ORDER.map((k) => (
+        <button
+          key={k}
+          className={`chip ${active.has(k) ? "on" : ""}`}
+          onClick={() => onToggle(k)}
+        >
+          {k}<span className="n">{counts[k] ?? 0}</span>
+        </button>
+      ))}
+      <span className="chip" style={{ marginLeft: "auto", cursor: "default" }}>
+        {events.length} events
+      </span>
+    </div>
+  );
 }
 
-export default function Timeline({ events }) {
+export default function Timeline({ events, t0 }) {
   const ref = useRef(null);
-  useEffect(() => { const el = ref.current; if (el) el.scrollTop = el.scrollHeight; }, [events]);
+  const stick = useRef(true);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const onScroll = () => {
+      stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [events]);
+
   return (
-    <div ref={ref} style={{ flex: 1, overflowY: "auto", padding: 8, fontFamily: "monospace", fontSize: 13 }}>
-      {events.map((ev) => (
-        <div key={ev.id} style={{ padding: "2px 0" }}>
-          <span style={{ opacity: 0.4, marginRight: 6 }}>{ev.type}</span>
-          {summarize(ev)}
-        </div>
-      ))}
+    <div className="timeline" ref={ref}>
+      {events.length === 0 ? (
+        <div className="empty">No events yet — press Start.</div>
+      ) : (
+        events.map((ev) => <EventRow key={ev.id} ev={ev} t0={t0} />)
+      )}
     </div>
   );
 }

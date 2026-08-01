@@ -62,7 +62,16 @@ from snail.vendor import (
 )
 
 from .agents import ECHO_ID, HOST_ID, POOL_KEY, REANCHOR, SPECS, TRANSLATE_ID
-from .events import active_agent_changed, error as err_event, to_client_json
+from .events import (
+    active_agent_changed,
+    error as err_event,
+    from_log_event,
+    setup_complete,
+    setup_stage,
+    speech,
+    to_client_json,
+    ttfb as ttfb_event,
+)
 from .routing import build_policy
 from .tools import echo_tools, host_tools
 
@@ -78,14 +87,37 @@ def _tools_for(cid: str) -> ToolRegistry:
 class MultiAgentBridge:
     """Pump between one FastAPI WebSocket and the multi-agent runtime.
 
-    ``agent_ids`` is the ordered set of agents to run this session (host first = default
+    ``agent_ids`` is the ordered set of agents to run this session (first = default
     active); ``pools`` maps a pool-key (see ``agents.POOL_KEY``) to a ConnectionPool.
+
+    Everything host/echo-specific arrives through the remaining keyword arguments,
+    which default to this example's own tables. That is what lets a different example
+    (``examples/confirmation``) reuse the whole pump — audio plane, endpointing,
+    routing seam, instrumentation — by passing its own specs and tools instead of
+    forking a second copy of all of it.
     """
 
-    def __init__(self, *, socket, pools: dict, agent_ids) -> None:
+    def __init__(
+        self,
+        *,
+        socket,
+        pools: dict,
+        agent_ids,
+        specs: dict | None = None,
+        pool_key: dict | None = None,
+        reanchor: dict | None = None,
+        tools_for=None,
+        policy=None,
+        initial_agent: str | None = None,
+    ) -> None:
         self._socket = socket
         self._pools = pools
         self._agent_ids = list(agent_ids)
+        self._specs = SPECS if specs is None else specs
+        self._pool_key = POOL_KEY if pool_key is None else pool_key
+        self._reanchor_text = REANCHOR if reanchor is None else reanchor
+        self._tools_for = _tools_for if tools_for is None else tools_for
+        self._initial = self._agent_ids[0] if initial_agent is None else initial_agent
         self._conns: dict[str, object] = {}
         self._pool_of: dict[str, object] = {}
         self._sessions: dict[str, Session] = {}
@@ -132,6 +164,11 @@ class MultiAgentBridge:
         # window — the target metric — server-side.
         self._ttfb_t0: float | None = None
         self._ttfb_pending = False  # armed at ACTIVITY_END until first audio byte fires
+        # --- observability -----------------------------------------------------
+        # The log every Session writes to. The client gets the parts of it the vendor
+        # stream cannot supply (tool results, run transitions) via _pump_log.
+        self._log = EventLog()
+        self._log_cursor = 0
         # per-agent "you hold the token" gate: only the active agent pumps receive.
         self._active_ev: dict[str, asyncio.Event] = {
             cid: asyncio.Event() for cid in self._agent_ids
@@ -154,7 +191,7 @@ class MultiAgentBridge:
             client_rate=48000,  # opus is native 48k → no resample around the codec
         )
 
-        chain, programmatic = build_policy()
+        chain, programmatic = build_policy() if policy is None else policy
         self._programmatic = programmatic
         self._registry = ToolCallRegistry()
         self._router = Router(
@@ -184,6 +221,9 @@ class MultiAgentBridge:
         client = asyncio.create_task(self._pump_client())
         named[client] = "client_in"
         self._tasks.append(client)
+        logs = asyncio.create_task(self._pump_log())
+        named[logs] = "log_out"
+        self._tasks.append(logs)
         try:
             done, _ = await asyncio.wait(
                 self._tasks, return_when=asyncio.FIRST_COMPLETED
@@ -221,10 +261,23 @@ class MultiAgentBridge:
                 await asyncio.sleep(0.1)
 
     async def _setup(self) -> None:
-        event_log = EventLog()
+        event_log = self._log
+        t_setup = time.monotonic()
         for cid in self._agent_ids:
-            pool = self._pools[POOL_KEY[cid]]
-            conn = await pool.acquire(SPECS[cid])
+            pool = self._pools[self._pool_key[cid]]
+            # The dominant term: a cold acquire opens a live socket to the vendor and
+            # completes its setup handshake; a warm standby returns in ~0ms. The client
+            # sees both as the same stage, and the number tells them apart.
+            t0 = time.monotonic()
+            conn = await pool.acquire(self._specs[cid])
+            await self._emit(
+                setup_stage(
+                    "vendor_connect",
+                    (time.monotonic() - t0) * 1000.0,
+                    agent_id=cid,
+                    detail=self._specs[cid].setup.model or "",
+                )
+            )
             conn.activate()
             self._conns[cid] = conn
             self._pool_of[cid] = pool
@@ -238,15 +291,19 @@ class MultiAgentBridge:
             self._sessions[cid] = Session(
                 adapter=conn.adapter,
                 log=event_log,
-                tools=_tools_for(cid),
+                tools=self._tools_for(cid),
                 registry=self._registry,
                 router=self._router,
                 send=self._make_send(conn),
+                agent_id=cid,
             )
-        self._router.set_active(HOST_ID)  # host holds the token + hears user first
-        self._active_ev[HOST_ID].set()  # host pumps receive from the start
-        log.info("setup complete: agents=%s active=%s", list(self._conns), HOST_ID)
-        await self._emit(active_agent_changed(HOST_ID))
+        self._router.set_active(self._initial)  # holds the token + hears user first
+        self._active_ev[self._initial].set()  # this agent pumps receive from the start
+        log.info("setup complete: agents=%s active=%s", list(self._conns), self._initial)
+        await self._emit(
+            setup_complete((time.monotonic() - t_setup) * 1000.0, list(self._conns))
+        )
+        await self._emit(active_agent_changed(self._initial))
 
     async def _teardown(self) -> None:
         for task in self._tasks:
@@ -279,7 +336,7 @@ class MultiAgentBridge:
         log.info("promote → %s", agent_id)
         asyncio.create_task(self._emit(active_agent_changed(agent_id)))
         # re-anchor the agent's behavior after an excursion (non-triggering context turn).
-        reanchor = REANCHOR.get(agent_id)
+        reanchor = self._reanchor_text.get(agent_id)
         if reanchor is not None:
             asyncio.create_task(self._reanchor(agent_id, reanchor))
 
@@ -323,6 +380,7 @@ class MultiAgentBridge:
                         ev = self._vad.push(f)
                         if ev is VadEvent.START:
                             self._in_speech = True
+                            await self._emit(speech("speech_start"))
                         elif ev is VadEvent.END:
                             await self._end_speech()
                     await self._forward_drained()
@@ -332,6 +390,23 @@ class MultiAgentBridge:
                 await self._handle_control(text)
                 if self._closing:
                     return
+
+    async def _pump_log(self) -> None:
+        """Tail the shared event log → client, for what the vendor stream never carries.
+
+        Polled rather than hooked: tool results land from Session *tasks*, so there is no
+        single call site to piggyback on, and a run can transition long after the vendor
+        event that started it (docs 14). 50ms is well under human perception and the log
+        is a plain list, so the drain is a slice.
+        """
+        while not self._closing:
+            entries = self._log.events[self._log_cursor :]
+            self._log_cursor += len(entries)
+            for e in entries:
+                j = from_log_event(e)
+                if j is not None:
+                    await self._emit(j)
+            await asyncio.sleep(0.05)
 
     async def _forward_drained(self) -> None:
         """Forward mic audio to the active agent, but only between VAD START/END, with an
@@ -375,19 +450,33 @@ class MultiAgentBridge:
                 self._mic_logged = self._mic_bytes
 
     async def _end_speech(self) -> None:
-        """VAD END: close the user turn with ACTIVITY_END and arm the TTFB timer.
+        """Local VAD END: close the user turn (manual mode) and arm the TTFB timer.
 
         ``t0`` is the last speech frame (END fires exactly ``hangover`` after it), so the
         logged latency is the full end-of-speech→first-byte window.
+
+        Under Gemini's own VAD the bridge sends no markers, but the local energy VAD is
+        still running and still knows where the user stopped talking — so it is used as
+        the TTFB reference. The number then measures the same window and stays
+        comparable, with Gemini's ``silence_duration_ms`` included in it rather than
+        the bridge's hangover.
         """
         self._in_speech = False
         # discard any sub-threshold buffered segment that never opened an activity
         self._seg_bytes = 0
         self._preroll.clear()
-        if self._activity_open:  # only arm TTFB for a turn we actually opened
+        if self._activity_open:  # manual mode: only arm for a turn we actually opened
             await self._close_activity()
-            self._ttfb_t0 = time.monotonic() - self._hangover_s
-            self._ttfb_pending = True
+        elif self._manual_active():
+            return  # manual mode, nothing was open → not a real turn
+        self._ttfb_t0 = time.monotonic() - self._hangover_s
+        self._ttfb_pending = True
+        await self._emit(speech("speech_end"))
+
+    def _manual_active(self) -> bool:
+        """Does the active agent's adapter want manual activity markers?"""
+        conn = self._conns.get(self._router.active_id)
+        return bool(conn is not None and getattr(conn.adapter, "manual_activity", False))
 
     async def _open_activity(self, conn) -> None:
         """Send ACTIVITY_START once per speech segment (idempotent — a double-start is a
@@ -481,6 +570,7 @@ class MultiAgentBridge:
                 self._ttfb_pending = False
                 ttfb_ms = (time.monotonic() - self._ttfb_t0) * 1000.0
                 log.info("TTFB %s end-of-speech→first-byte: %.0f ms", cid, ttfb_ms)
+                await self._emit(ttfb_event(cid, ttfb_ms))
             self._pipeline.on_vendor_audio(pcm, vendor_rate=rate)
             # One WS binary message == one opus packet: the frontend downlink decodes each
             # message as a single EncodedAudioChunk, so egress frames are NOT coalesced
