@@ -443,14 +443,35 @@ instead of `content: str` + a `meta` the Gemini adapter silently dropped — whi
 `status` and `retriable` never reached the model at all, contrary to doc 03. Fixed on the
 way through.
 
-### Still to wire (loop-bound, not primitives)
+### Wired in the session (`session/session.py`)
 
-- session dispatch: take the slot, close the displaced carrier with `skipped`, emit
-  `input_required`, intercept `provide_input` by name and route it to `RunSlots.submit`
-- register `build_provide_input_tool(declared_keys(...))` at setup, and splice
-  `PROVIDE_INPUT_INSTRUCTION` into agent instructions
-- `TOOL_RUN` event emission at each transition
-- `sweep_expired` pumped from the session clock
+The loop-bound half. `RunSlots` stays pure; the future, the tasks and the carrier
+bookkeeping live here, because the session is the only layer that owns a loop.
+
+| Piece | What it does |
+|---|---|
+| `_start_tool` | takes the agent's slot, `_discard`s whatever it displaced, spawns the run task |
+| `_block` | the `OnBlock` seam: parks the run, closes its carrier with `input_required`, hands back the future `submit` resolves |
+| `_deliver_input` | intercepts `provide_input` **by name** (only the session knows which agent the call arrived on), extracts the typed slot, routes to `RunSlots.submit` |
+| `_emit_result` | the single exit: resolve once → log → send → route. `route_as` keeps routing seeing the *run's* tool name when the carrier is a `provide_input` call |
+| `_discard` | displaced run: cancel the task, close its carrier with `skipped` — a blocked run has no carrier, so nothing is sent |
+| `sweep_runs` | `sweep_expired` + task cancellation, pumped at each `TurnComplete` |
+| `agent_id` | names the connection this session serves; a multi-agent bridge runs one session per connection over a shared `RunSlots`, so a call on one never displaces another's run |
+
+Two consequences worth stating:
+
+- **Barge-in spares blocked runs.** The user speaking *is* how they answer; cancelling
+  the group's tasks on `Interrupted` would kill every consent flow at the moment it was
+  about to succeed.
+- **`timeout_s` is not applied to a tool that declares `requires`.** It is wall-clock, so
+  a human's thinking time would eat it. Those tools are bounded by
+  `InputRequired.budget_s` and `sweep_runs` instead.
+
+Setup registration (`build_provide_input_tool(declared_keys(...))` + splicing
+`PROVIDE_INPUT_INSTRUCTION`) is per-deployment; `examples/confirmation` shows the shape.
+
+Covered by `tests/test_session_runs.py`; `examples/confirmation` runs the whole matrix
+end-to-end (`PYTHONPATH=examples python -m confirmation.demo`).
 
 ### Kept, by decision
 
