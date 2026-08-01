@@ -61,6 +61,19 @@ async def test_consent_granted_answers_the_original_question() -> None:
     assert "NO ENTRY" in payload["data"]["answer"]
 
 
+def test_instruction_tells_the_model_a_refusal_is_an_answer() -> None:
+    """The false path below is only reachable if the instruction authorises it.
+
+    An earlier wording ("if they refuse ... do not call provide_input") conflated a
+    refusal with no answer, so the model heard "no", said "okay, I won't", and called
+    nothing — the run sat blocked until it expired. Every submitted answer in a live
+    session was ``true``. The mechanics were never at fault, so the guard belongs here.
+    """
+    text = PROVIDE_INPUT_INSTRUCTION.lower()
+    assert "a refusal is an answer" in text
+    assert "bool_value: false" in text
+
+
 async def test_consent_refused_does_not_record() -> None:
     wire = demo.Wire()
     await wire.calls_tool("record_meeting", title="standup")

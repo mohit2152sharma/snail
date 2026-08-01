@@ -42,8 +42,15 @@ SLOT_BY_EXPECTS: dict[str, str] = {
 }
 
 #: Splice into an agent's system instruction. Deliberately short — long instructions
-#: drift in live models. Step 4 is the only guard against the model reporting a value
+#: drift in live models. Step 5 is the only guard against the model reporting a value
 #: the user never gave; it reduces that risk, it does not remove it.
+#:
+#: Steps 4 and 5 are split because collapsing them silently loses every "no". Told only
+#: that a refusal is a reason *not* to answer, a model hears "no, don't take a photo",
+#: says "okay, I won't", and calls nothing — so the run sits blocked for its whole budget
+#: and dies by expiry, and the tool's denial branch never runs. Live logs showed six
+#: submitted answers, all ``true``: consent was unrefusable in practice. A refusal to a
+#: yes/no question *is* an answer; only silence is not.
 PROVIDE_INPUT_INSTRUCTION = """\
 Some tool results ask for input instead of giving an answer. When a result has
 status "input_required":
@@ -52,8 +59,11 @@ status "input_required":
   3. Call provide_input, copying "for_tool" and "key" exactly from that result,
      and putting the user's answer in the slot named by "expects":
        boolean -> bool_value, string -> text_value, number -> number_value.
-  4. Never supply a value the user did not actually give. If they refuse, decline,
-     or change the subject, do not call provide_input.
+  4. A refusal is an answer. If they say no, decline, or withhold permission,
+     call provide_input with the negative value (boolean -> bool_value: false).
+  5. Only skip provide_input when they gave no answer at all — they changed the
+     subject, asked something else, or ignored the question. Never invent a value
+     they did not give.
 
 Some tool results have status "skipped". Say nothing about them and carry on.\
 """
