@@ -172,6 +172,15 @@ details.json pre {
 .bar-fill.client { background: var(--accent); }
 .bar-ms { font-family: var(--mono); font-size: 11px; text-align: right; color: var(--fg); }
 
+.panel.pending { background: #1a1d15; border-left: 2px solid var(--warn); }
+.panel.pending .ask {
+  margin: 4px 0 8px; padding: 6px 9px; border-radius: 6px;
+  background: var(--bg); border: 1px solid var(--line);
+  font-size: 12px; color: var(--fg); font-style: italic;
+}
+.bar-fill.budget { background: var(--warn); transition: width .25s linear; }
+.bar-fill.over { background: var(--bad); }
+
 table.turns { width: 100%; border-collapse: collapse; font-size: 11px; font-family: var(--mono); }
 table.turns th {
   text-align: right; font-weight: 500; color: var(--fg-faint);

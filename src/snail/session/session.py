@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable
 
 from snail.context import EventLog, EventType
@@ -219,7 +220,15 @@ class Session:
         carrier = run.carrier_call_id
         future = asyncio.get_running_loop().create_future()
         self._runs.block(run, pending, resume=future)
-        self._log_run(run, "blocked", key=pending.key, expects=pending.expects)
+        self._log_run(
+            run,
+            "blocked",
+            key=pending.key,
+            expects=pending.expects,
+            ask=pending.ask,
+            budget_s=pending.budget_s,
+            deadline=run.deadline,
+        )
         if carrier is not None:
             await self._emit_result(
                 carrier,
@@ -379,7 +388,7 @@ class Session:
         its call, so an unanswered question owes the vendor nothing."""
         expired = self._runs.sweep_expired(now)
         for run in expired:
-            self._log_run(run, "expired")
+            self._log_run(run, "expired", waited_s=round(time.time() - run.started_at, 1))
             task = self._run_tasks.pop(run.run_id, None)
             if task is not None:
                 task.cancel()

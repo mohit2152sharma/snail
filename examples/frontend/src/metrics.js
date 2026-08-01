@@ -13,6 +13,11 @@ export const INITIAL_METRICS = Object.freeze({
   ttfb: { count: 0, lastMs: null, minMs: null, maxMs: null, p50Ms: null, samples: [] },
   counts: {},          // event type → how many
   errors: [],          // [{ code, message, ts }]
+  // The run currently waiting on the user, if any: what it asked, and when its budget
+  // runs out. One per agent by construction, and this playground drives one agent.
+  pending: null,       // { runId, agentId, tool, key, expects, ask, budgetS, blockedTs }
+  // How the last wait ended, kept after `pending` clears so the outcome stays readable.
+  lastWait: null,      // { runId, tool, key, outcome, waitedS, ts }
 });
 
 function withCount(counts, type) {
@@ -112,6 +117,35 @@ export function reduceMetrics(state, ev) {
       return { ...s, turns: patchOpen(s.turns, {
         open: false, doneMs: ev.ts - cur.endOfSpeechTs,
       }) };
+    }
+
+    // The run-level machine (docs 14). `blocked` opens a wait; anything terminal
+    // closes it. `submit` only closes it when it was accepted — a rejected answer
+    // leaves the run blocked and still answerable, so the countdown keeps running.
+    case EVENT_TYPES.TOOL_RUN: {
+      if (ev.phase === "blocked") {
+        return { ...s, pending: {
+          runId: ev.run_id, agentId: ev.agent_id ?? null, tool: ev.tool_name,
+          key: ev.key, expects: ev.expects, ask: ev.ask ?? "",
+          budgetS: ev.budget_s ?? null, blockedTs: ev.ts,
+        } };
+      }
+      const closes =
+        ev.phase === "expired" || ev.phase === "displaced" || ev.phase === "finished" ||
+        (ev.phase === "submit" && ev.outcome === "accepted");
+      if (!closes) return s;
+      const open = s.pending;
+      if (open && open.runId !== ev.run_id) return s;  // not this wait
+      return {
+        ...s,
+        pending: null,
+        lastWait: open ? {
+          runId: ev.run_id, tool: ev.tool_name ?? open.tool, key: open.key,
+          outcome: ev.phase === "submit" ? "answered" : ev.phase,
+          waitedS: ev.waited_s ?? Math.round((ev.ts - open.blockedTs) / 100) / 10,
+          ts: ev.ts,
+        } : s.lastWait,
+      };
     }
 
     case EVENT_TYPES.ERROR:

@@ -296,7 +296,11 @@ async def test_expired_run_is_cancelled_and_sends_nothing() -> None:
 
     assert [r.run_id for r in expired] == ["R1"]
     assert len(ctx["sent"]) == 1  # only the original ask
-    assert [m["phase"] for m in _runs(ctx)][-1] == "expired"
+    phases = {m["phase"]: m for m in _runs(ctx)}
+    # The budget rides the blocked event so a client can show the clock it is racing.
+    assert phases["blocked"]["budget_s"] == CONSENT.budget_s
+    assert phases["blocked"]["ask"] == CONSENT.ask
+    assert "waited_s" in phases["expired"]
     # The slot is free, so the next request starts clean.
     await _answer(session, "c2", bool_value=True)
     assert ctx["sent"][1]["payload"]["status"] == "skipped"

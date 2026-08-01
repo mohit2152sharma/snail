@@ -6,6 +6,7 @@ import { kindOf, KINDS } from "./protocol.js";
 import ControlsBar from "./ui/ControlsBar.jsx";
 import Timeline, { Filters } from "./ui/Timeline.jsx";
 import AgentPanel from "./ui/AgentPanel.jsx";
+import PendingPanel from "./ui/PendingPanel.jsx";
 import SetupPanel from "./ui/SetupPanel.jsx";
 import TurnsPanel from "./ui/TurnsPanel.jsx";
 import CountsPanel from "./ui/CountsPanel.jsx";
@@ -58,6 +59,7 @@ export default function App() {
           <Timeline events={shown} t0={t0} />
         </div>
         <div className="rail">
+          <PendingPanel metrics={s.metrics} />
           <SetupPanel metrics={s.metrics} />
           <TurnsPanel metrics={s.metrics} />
           <AgentPanel

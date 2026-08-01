@@ -84,6 +84,67 @@ describe("ttfb aggregation", () => {
   });
 });
 
+describe("pending input", () => {
+  const blocked = (over = {}) => ({
+    type: "tool_run", phase: "blocked", run_id: "R1", agent_id: "a",
+    tool_name: "make_call", key: "phone_number", expects: "string",
+    ask: "which number?", budget_s: 45, ts: 1000, ...over,
+  });
+
+  it("opens a wait on blocked, carrying the budget", () => {
+    const m = fold([blocked()]);
+    expect(m.pending).toEqual({
+      runId: "R1", agentId: "a", tool: "make_call", key: "phone_number",
+      expects: "string", ask: "which number?", budgetS: 45, blockedTs: 1000,
+    });
+  });
+
+  it("closes it on expiry and keeps how long it waited", () => {
+    const m = fold([
+      blocked(),
+      { type: "tool_run", phase: "expired", run_id: "R1", tool_name: "make_call",
+        waited_s: 45.2, ts: 46200 },
+    ]);
+    expect(m.pending).toBeNull();
+    expect(m.lastWait).toMatchObject({ outcome: "expired", waitedS: 45.2, tool: "make_call" });
+  });
+
+  it("closes it on an accepted answer", () => {
+    const m = fold([
+      blocked(),
+      { type: "tool_run", phase: "submit", run_id: "R1", outcome: "accepted", ts: 3000 },
+    ]);
+    expect(m.pending).toBeNull();
+    expect(m.lastWait).toMatchObject({ outcome: "answered", waitedS: 2 });
+  });
+
+  it("keeps waiting when an answer is rejected", () => {
+    const m = fold([
+      blocked(),
+      { type: "tool_run", phase: "submit", run_id: "R1", outcome: "key_mismatch", ts: 2000 },
+    ]);
+    expect(m.pending).not.toBeNull();  // still answerable, clock still running
+    expect(m.lastWait).toBeNull();
+  });
+
+  it("ignores a terminal phase from a different run", () => {
+    const m = fold([
+      blocked(),
+      { type: "tool_run", phase: "finished", run_id: "R9", ts: 2000 },
+    ]);
+    expect(m.pending?.runId).toBe("R1");
+  });
+
+  it("displacement closes the wait", () => {
+    const m = fold([
+      blocked(),
+      { type: "tool_run", phase: "displaced", run_id: "R1", ts: 1800 },
+    ]);
+    expect(m.pending).toBeNull();
+    expect(m.lastWait).toMatchObject({ outcome: "displaced" });
+  });
+});
+
 describe("counts and errors", () => {
   it("tallies every event type it sees", () => {
     const m = fold([

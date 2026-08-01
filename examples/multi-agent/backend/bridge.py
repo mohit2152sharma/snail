@@ -392,14 +392,19 @@ class MultiAgentBridge:
                     return
 
     async def _pump_log(self) -> None:
-        """Tail the shared event log → client, for what the vendor stream never carries.
+        """The session clock: expire overdue runs, then tail the log → client.
 
-        Polled rather than hooked: tool results land from Session *tasks*, so there is no
-        single call site to piggyback on, and a run can transition long after the vendor
-        event that started it (docs 14). 50ms is well under human perception and the log
-        is a plain list, so the drain is a slice.
+        Polled rather than hooked, for two reasons. Tool results land from Session
+        *tasks*, so there is no single call site to piggyback on. And an
+        ``InputRequired`` budget has to expire while **nothing is happening** — a user
+        who says nothing produces no events, so a sweep driven only by turn boundaries
+        would never fire, which is exactly the case the budget exists for (docs 14).
+
+        Sweeping first means an expiry is logged and shipped on the same tick.
         """
         while not self._closing:
+            for session in self._sessions.values():
+                session.sweep_runs()
             entries = self._log.events[self._log_cursor :]
             self._log_cursor += len(entries)
             for e in entries:
