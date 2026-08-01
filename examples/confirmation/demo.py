@@ -161,8 +161,34 @@ async def direct() -> None:
     print(f"  runs  : {w.runs()}")
 
 
+async def call_with_number() -> None:
+    title(4, "the value was already given — same tool, no round trip")
+    w = Wire()
+    await w.says("call 98765 43210")
+    # The model heard a number, so it passes one and the run never blocks.
+    await w.calls_tool("make_call", number="98765 43210")
+    print(f"  runs  : {w.runs()}")
+
+
+async def call_without_number() -> None:
+    title(5, "the value is missing — asked for, and answered as a string")
+    w = Wire()
+    await w.says("i want to make a call")
+    await w.calls_tool("make_call")
+    print("  agent : (asks) 'what number should I call?'")
+    await w.says("plus nine one, nine eight seven six five, four three two one zero")
+    # expects=string → the answer rides text_value, not bool_value.
+    await w.calls_tool(
+        "provide_input",
+        for_tool="make_call",
+        key="phone_number",
+        text_value="+91 98765-43210",
+    )
+    print(f"  runs  : {w.runs()}")
+
+
 async def topic_change() -> None:
-    title(4, "user changes the subject mid-question — the old run is dropped silently")
+    title(6, "user changes the subject mid-question — the old run is dropped silently")
     w = Wire()
     await w.says("what does this sign say?")
     await w.calls_tool("look_and_tell", question="what does this sign say?")
@@ -179,7 +205,7 @@ async def topic_change() -> None:
 
 
 async def misaddressed() -> None:
-    title(5, "answer addressed to the wrong tool — rejected, run stays answerable")
+    title(7, "answer addressed to the wrong tool — rejected, run stays answerable")
     w = Wire()
     await w.says("record the meeting")
     await w.calls_tool("record_meeting")
@@ -197,7 +223,7 @@ async def misaddressed() -> None:
 
 
 async def wrong_type() -> None:
-    title(6, "answer in the wrong slot — retriable, then corrected")
+    title(8, "answer in the wrong slot — retriable, then corrected")
     w = Wire()
     await w.says("record the meeting")
     await w.calls_tool("record_meeting")
@@ -215,7 +241,7 @@ async def wrong_type() -> None:
 
 
 async def expiry() -> None:
-    title(7, "nobody answers — the run expires on its own budget")
+    title(9, "nobody answers — the run expires on its own budget")
     w = Wire()
     await w.says("record the meeting")
     await w.calls_tool("record_meeting")
@@ -230,6 +256,8 @@ async def main() -> None:
         happy_path,
         refusal,
         direct,
+        call_with_number,
+        call_without_number,
         topic_change,
         misaddressed,
         wrong_type,

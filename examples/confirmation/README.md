@@ -1,15 +1,16 @@
 # confirmation — tools that pause for the user's answer
 
-A voice agent with three tools, chosen to cover the three shapes a tool can have:
+A voice agent with four tools, chosen to cover the shapes a tool can have:
 
 | tool | blocks on | shows |
 |---|---|---|
 | `look_and_tell` | camera consent | the run outliving the call — the answer it finally gives depends on the question asked *before* the wait |
 | `record_meeting` | recording consent | a real refusal branch: no consent, no recording |
+| `make_call` | a phone number, *only if the user did not say one* | blocking is a runtime fact, not a property of the tool — and the answer is a string, not a boolean |
 | `get_date_and_time` | nothing | the same executor with no `ctx` at all |
 
-Camera, microphone and vision are mocked (`mocks.py`). The subject here is the
-permission round-trip, not device I/O.
+Camera, microphone, vision and telephony are mocked (`mocks.py`). The subject here is
+the round-trip, not device or network I/O.
 
 ## Run it
 
@@ -38,17 +39,22 @@ is not: it sits in the agent's slot holding the question.
 correlation is the connection the call arrived on, which names the agent, which has at
 most one blocked run.
 
-**4. A topic change drops the old run silently.** Scenario 4: the user gives up on the
+**4. The same tool takes both paths.** Scenarios 4 and 5: "call 98765 43210" dials
+immediately — the model already has the value, so nothing blocks. "I want to make a
+call" blocks on `phone_number`, and the answer comes back in `text_value` because the
+requirement declares `expects: "string"`. One handler, one `await`, two behaviours.
+
+**5. A topic change drops the old run silently.** Scenario 6: the user gives up on the
 sign and asks for the date. The newer call takes the agent's slot; the blocked run is
 cancelled with nothing sent, because its ask already closed the only call it had. When
 a late consent finally arrives it is answered `skipped` — the model is not left
 hanging, and is told to say nothing about it.
 
-**5. A wrong answer never costs the user the right one.** Scenarios 5 and 6: an answer
+**6. A wrong answer never costs the user the right one.** Scenarios 7 and 8: an answer
 for the wrong tool is `skipped`, an answer in the wrong slot is `invalid_args` and
 retriable. Both leave the run blocked and still answerable.
 
-**6. An unanswered question expires on its own budget.** Scenario 7:
+**7. An unanswered question expires on its own budget.** Scenario 9:
 `InputRequired.budget_s`, swept by `Session.sweep_runs`. Nothing is sent — there is no
 open call to send it on.
 
@@ -56,9 +62,9 @@ open call to send it on.
 
 | file | what it is |
 |---|---|
-| `tools.py` | the three tools + the registry, including `provide_input` built from the declared consent keys |
+| `tools.py` | the four tools + the registry, including `provide_input` built from the declared input keys |
 | `agent.py` | the system instruction (task half + the framework's protocol block) and the Gemini Live `AgentSpec` |
-| `mocks.py` | camera / microphone / clock stand-ins |
+| `mocks.py` | camera / microphone / telephony / clock stand-ins |
 | `demo.py` | the scripted walkthrough |
 
 `tests/test_example_confirmation.py` runs all of it headless.
