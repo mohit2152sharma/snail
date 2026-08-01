@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import logging
 import os
+import pathlib
+import time
 
 import uvicorn
 from fastapi import FastAPI, WebSocket
@@ -133,7 +135,31 @@ def create_app() -> FastAPI:
     return app
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, force=True)
+def _configure_logging() -> str:
+    """Log to stdout *and* to a per-run file.
+
+    A live session is unreproducible: the interesting failures are model behaviour, and
+    the only record of one is what the bridge saw. The browser timeline holds the same
+    events but dies with the tab, so the file is the durable copy — every run gets one,
+    with no flag to remember. ``SNAIL_LOG_FILE`` pins the path when a specific run needs
+    to land somewhere known.
+    """
+    path = pathlib.Path(
+        os.environ.get("SNAIL_LOG_FILE")
+        or f"logs/confirmation-{time.strftime('%Y%m%d-%H%M%S')}.log"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        force=True,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=[logging.StreamHandler(), logging.FileHandler(path)],
+    )
     logging.getLogger("multiagent").setLevel(logging.INFO)
+    return str(path)
+
+
+if __name__ == "__main__":
+    _path = _configure_logging()
+    log.info("logging this run to %s", _path)
     uvicorn.run(create_app(), host="0.0.0.0", port=8000)
