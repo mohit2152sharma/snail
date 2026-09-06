@@ -22,6 +22,10 @@ class EventType(enum.Enum):
     AGENT_SPEECH = "agent_speech"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    #: Run-level transitions (docs 14). Control only — the projection drops it, which
+    #: is what keeps run state out of the model's context after we deliberately kept
+    #: it out of the model's head.
+    TOOL_RUN = "tool_run"
     EXTERNAL_CONTEXT = "external_context"
     HANDOFF = "handoff"
 

@@ -106,9 +106,11 @@ def test_serialize_history_preserves_order_and_records() -> None:
 
 def test_serialize_tool_result_records() -> None:
     a = MockVendorAdapter()
-    out = a.serialize_tool_result(call_id="c1", name="get_balance", content="42")
+    out = a.serialize_tool_result(
+        call_id="c1", name="get_balance", payload={"status": "success", "data": 42}
+    )
     assert out["call_id"] == "c1"
-    assert out["content"] == "42"
+    assert out["payload"] == {"status": "success", "data": 42}
     assert a.sent_tool_results == [out]
 
 

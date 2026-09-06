@@ -72,9 +72,14 @@ class VendorAdapter(Protocol):
         ...
 
     def serialize_tool_result(
-        self, *, call_id: str, name: str, content: str, meta: dict | None = None
+        self, *, call_id: str, name: str, payload: dict
     ) -> Any:
-        """Serialize a tool result to the vendor's function-response shape."""
+        """Serialize a tool result to the vendor's function-response shape.
+
+        ``payload`` is ``ToolResult.to_payload()`` — the single authority on what the
+        model sees. Adapters place it as-is; they neither add nor drop fields, so the
+        envelope contract in docs 03 holds identically on every vendor.
+        """
         ...
 
     def parse_event(self, raw: dict) -> list[ParsedEvent]:

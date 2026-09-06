@@ -27,8 +27,11 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not bench'"
 asyncio_mode = "auto"
+markers = [
+    "bench: performance / load benchmarks (opt-in; run with -m bench)",
+]
 
 [dependency-groups]
 dev = [

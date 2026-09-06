@@ -20,6 +20,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import time
+from collections import deque
 
 log = logging.getLogger("multiagent")
 
@@ -27,10 +30,12 @@ from snail.audio import (
     FRAME_LEN,
     AudioPipeline,
     AudioSource,
+    EnergyVad,
     FanoutBus,
     FramePool,
     JitterBuffer,
     LazyResampler,
+    VadEvent,
 )
 from snail.audio.opus_codec import OpusCodec
 from snail.audio.soxr_backend import SoxrResampleBackend
@@ -48,10 +53,27 @@ from snail.router import (
 )
 from snail.session import Session
 from snail.tools import ToolRegistry
-from snail.vendor import Interrupted, MediaChunk, ResponseModality
+from snail.vendor import (
+    Interrupted,
+    MediaChunk,
+    RealtimeControl,
+    ResponseModality,
+    TurnComplete,
+    UserSpeechEnd,
+    UserSpeechStart,
+)
 
 from .agents import ECHO_ID, HOST_ID, POOL_KEY, REANCHOR, SPECS, TRANSLATE_ID
-from .events import active_agent_changed, error as err_event, to_client_json
+from .events import (
+    active_agent_changed,
+    error as err_event,
+    from_log_event,
+    setup_complete,
+    setup_stage,
+    speech,
+    to_client_json,
+    ttfb as ttfb_event,
+)
 from .routing import build_policy
 from .tools import echo_tools, host_tools
 
@@ -67,14 +89,37 @@ def _tools_for(cid: str) -> ToolRegistry:
 class MultiAgentBridge:
     """Pump between one FastAPI WebSocket and the multi-agent runtime.
 
-    ``agent_ids`` is the ordered set of agents to run this session (host first = default
+    ``agent_ids`` is the ordered set of agents to run this session (first = default
     active); ``pools`` maps a pool-key (see ``agents.POOL_KEY``) to a ConnectionPool.
+
+    Everything host/echo-specific arrives through the remaining keyword arguments,
+    which default to this example's own tables. That is what lets a different example
+    (``examples/confirmation``) reuse the whole pump — audio plane, endpointing,
+    routing seam, instrumentation — by passing its own specs and tools instead of
+    forking a second copy of all of it.
     """
 
-    def __init__(self, *, socket, pools: dict, agent_ids) -> None:
+    def __init__(
+        self,
+        *,
+        socket,
+        pools: dict,
+        agent_ids,
+        specs: dict | None = None,
+        pool_key: dict | None = None,
+        reanchor: dict | None = None,
+        tools_for=None,
+        policy=None,
+        initial_agent: str | None = None,
+    ) -> None:
         self._socket = socket
         self._pools = pools
         self._agent_ids = list(agent_ids)
+        self._specs = SPECS if specs is None else specs
+        self._pool_key = POOL_KEY if pool_key is None else pool_key
+        self._reanchor_text = REANCHOR if reanchor is None else reanchor
+        self._tools_for = _tools_for if tools_for is None else tools_for
+        self._initial = self._agent_ids[0] if initial_agent is None else initial_agent
         self._conns: dict[str, object] = {}
         self._pool_of: dict[str, object] = {}
         self._sessions: dict[str, Session] = {}
@@ -84,6 +129,48 @@ class MultiAgentBridge:
         self._mic_bytes = 0
         self._mic_logged = 0
         self._out_bytes = 0
+        # --- endpointing (server-side VAD in manual-activity mode) -------------
+        # The bridge, not Gemini, decides end-of-speech: an energy VAD + hangover sends
+        # ACTIVITY_END after `hangover` frames of sub-threshold audio instead of Gemini's
+        # flat 800ms wait, cutting the dominant per-turn TTFB term.
+        #
+        # DEFAULT IS MAXIMALLY AGGRESSIVE (1 frame / 10ms) to meet the 50% TTFB target —
+        # live paired A/B measures a 50.9% median cut at this setting. It trades all
+        # pause-tolerance for latency and WILL clip mid-sentence pauses (barge-in). For a
+        # conversational profile use SNAIL_VAD_HANGOVER_FRAMES=15 (150ms, ~32% cut) or 30
+        # (300ms, ~24%). See docs/superpowers/2026-07-25-live-ttfb-benchmark.md.
+        hangover = int(os.environ.get("SNAIL_VAD_HANGOVER_FRAMES", "1"))
+        self._vad = EnergyVad(
+            hangover_frames=hangover,
+            start_frames=int(os.environ.get("SNAIL_VAD_START_FRAMES", "3")),
+            # margin 4.0: live testing showed 3.0 let agent echo trip spurious barge-ins.
+            margin=float(os.environ.get("SNAIL_VAD_MARGIN", "4.0")),
+        )
+        self._hangover_s = hangover * 0.010  # frames → seconds (10ms/frame)
+        self._in_speech = False
+        # Single source of truth for the manual-activity handshake: exactly one
+        # ACTIVITY_START must precede each ACTIVITY_END. Gemini rejects a double-start or
+        # an end-without-start with a 1007 "Precondition check failed" that kills the
+        # connection, so open/close are made idempotent (guarded on this flag).
+        self._activity_open = False
+        self._preroll: deque[bytes] = deque(maxlen=32)  # pre-roll / pre-open buffer
+        # Don't open a manual activity until the segment carries this much real speech:
+        # Gemini rejects an activity_start→activity_end that carried too little audio with
+        # a 1007 precondition failure. Sub-threshold blips (noise/echo after barge-in)
+        # thus never emit markers. 16kHz mono s16 = 32 bytes/ms.
+        self._min_open_bytes = int(os.environ.get("SNAIL_VAD_MIN_OPEN_MS", "120")) * 32
+        self._seg_bytes = 0  # audio bytes buffered in the not-yet-opened segment
+        # --- per-turn TTFB instrumentation -------------------------------------
+        # Now that the bridge decides end-of-speech, t0 is the last speech frame
+        # (END_time − hangover), so this measures the full end-of-speech→first-byte
+        # window — the target metric — server-side.
+        self._ttfb_t0: float | None = None
+        self._ttfb_pending = False  # armed at ACTIVITY_END until first audio byte fires
+        # --- observability -----------------------------------------------------
+        # The log every Session writes to. The client gets the parts of it the vendor
+        # stream cannot supply (tool results, run transitions) via _pump_log.
+        self._log = EventLog()
+        self._log_cursor = 0
         # per-agent "you hold the token" gate: only the active agent pumps receive.
         self._active_ev: dict[str, asyncio.Event] = {
             cid: asyncio.Event() for cid in self._agent_ids
@@ -98,12 +185,15 @@ class MultiAgentBridge:
             bus=self._bus,
             resampler=LazyResampler(SoxrResampleBackend()),
             gate=self._gate,
-            jitter=JitterBuffer(),
+            # egress prebuffer: 1 frame (10ms) instead of the default 3 (30ms) — shaves
+            # ~20ms off first-byte-out at a small underrun-smoothing cost (Gemini bursts
+            # are large, so playout re-arms immediately). Part of the per-turn TTFB budget.
+            jitter=JitterBuffer(prefill_frames=1),
             codec=OpusCodec(),  # client leg: opus ⇄ 48k int16 mono
             client_rate=48000,  # opus is native 48k → no resample around the codec
         )
 
-        chain, programmatic = build_policy()
+        chain, programmatic = build_policy() if policy is None else policy
         self._programmatic = programmatic
         self._registry = ToolCallRegistry()
         self._router = Router(
@@ -133,6 +223,9 @@ class MultiAgentBridge:
         client = asyncio.create_task(self._pump_client())
         named[client] = "client_in"
         self._tasks.append(client)
+        logs = asyncio.create_task(self._pump_log())
+        named[logs] = "log_out"
+        self._tasks.append(logs)
         try:
             done, _ = await asyncio.wait(
                 self._tasks, return_when=asyncio.FIRST_COMPLETED
@@ -170,10 +263,23 @@ class MultiAgentBridge:
                 await asyncio.sleep(0.1)
 
     async def _setup(self) -> None:
-        event_log = EventLog()
+        event_log = self._log
+        t_setup = time.monotonic()
         for cid in self._agent_ids:
-            pool = self._pools[POOL_KEY[cid]]
-            conn = await pool.acquire(SPECS[cid])
+            pool = self._pools[self._pool_key[cid]]
+            # The dominant term: a cold acquire opens a live socket to the vendor and
+            # completes its setup handshake; a warm standby returns in ~0ms. The client
+            # sees both as the same stage, and the number tells them apart.
+            t0 = time.monotonic()
+            conn = await pool.acquire(self._specs[cid])
+            await self._emit(
+                setup_stage(
+                    "vendor_connect",
+                    (time.monotonic() - t0) * 1000.0,
+                    agent_id=cid,
+                    detail=self._specs[cid].setup.model or "",
+                )
+            )
             conn.activate()
             self._conns[cid] = conn
             self._pool_of[cid] = pool
@@ -187,15 +293,19 @@ class MultiAgentBridge:
             self._sessions[cid] = Session(
                 adapter=conn.adapter,
                 log=event_log,
-                tools=_tools_for(cid),
+                tools=self._tools_for(cid),
                 registry=self._registry,
                 router=self._router,
                 send=self._make_send(conn),
+                agent_id=cid,
             )
-        self._router.set_active(HOST_ID)  # host holds the token + hears user first
-        self._active_ev[HOST_ID].set()  # host pumps receive from the start
-        log.info("setup complete: agents=%s active=%s", list(self._conns), HOST_ID)
-        await self._emit(active_agent_changed(HOST_ID))
+        self._router.set_active(self._initial)  # holds the token + hears user first
+        self._active_ev[self._initial].set()  # this agent pumps receive from the start
+        log.info("setup complete: agents=%s active=%s", list(self._conns), self._initial)
+        await self._emit(
+            setup_complete((time.monotonic() - t_setup) * 1000.0, list(self._conns))
+        )
+        await self._emit(active_agent_changed(self._initial))
 
     async def _teardown(self) -> None:
         for task in self._tasks:
@@ -218,10 +328,17 @@ class MultiAgentBridge:
         # drop any residual audio the previous agent left in the jitter/gate rings so the
         # newly-active agent starts clean (no tail of the old agent bleeding through).
         self._pipeline.cut()
+        # reset endpointing so the new agent isn't handed a dangling half-turn. The old
+        # agent's activity (if any) is closed on demote; the new agent starts closed.
+        self._vad.reset()
+        self._in_speech = False
+        self._activity_open = False
+        self._seg_bytes = 0
+        self._preroll.clear()
         log.info("promote → %s", agent_id)
         asyncio.create_task(self._emit(active_agent_changed(agent_id)))
         # re-anchor the agent's behavior after an excursion (non-triggering context turn).
-        reanchor = REANCHOR.get(agent_id)
+        reanchor = self._reanchor_text.get(agent_id)
         if reanchor is not None:
             asyncio.create_task(self._reanchor(agent_id, reanchor))
 
@@ -239,6 +356,16 @@ class MultiAgentBridge:
         # the host's confirmation generated after the control tool) is consumed and
         # *dropped* here, not left buffered to replay when the agent is promoted back.
         self._pipeline.detach_consumer(agent_id)
+        # Close any open manual-activity on the demoted connection so it isn't left
+        # dangling — a later promote-back would ACTIVITY_START over it (1007).
+        if self._activity_open:
+            self._activity_open = False
+            self._in_speech = False
+            conn = self._conns.get(agent_id)
+            if conn is not None:
+                asyncio.create_task(
+                    conn.send_realtime_control(RealtimeControl.ACTIVITY_END)
+                )
         log.info("demote → %s", agent_id)
 
     # --- client → agents --------------------------------------------------
@@ -251,7 +378,19 @@ class MultiAgentBridge:
             data = msg.get("bytes")
             if data is not None:
                 if not self._muted:
-                    self._pipeline.on_client_audio(data)
+                    # The local VAD is kept fed unconditionally (its noise floor has to
+                    # track the room whether or not anyone is asking it), but under an
+                    # auto-VAD agent nobody consumes its verdict: the vendor endpoints
+                    # the turn and reports the boundary itself.
+                    manual = self._manual_active()
+                    for f in self._pipeline.on_client_audio(data):
+                        ev = self._vad.push(f)
+                        if ev is VadEvent.START:
+                            self._in_speech = True
+                            if manual:
+                                await self._emit(speech("speech_start"))
+                        elif ev is VadEvent.END:
+                            await self._end_speech()
                     await self._forward_drained()
                 continue
             text = msg.get("text")
@@ -260,12 +399,60 @@ class MultiAgentBridge:
                 if self._closing:
                     return
 
+    async def _pump_log(self) -> None:
+        """The session clock: expire overdue runs, then tail the log → client.
+
+        Polled rather than hooked, for two reasons. Tool results land from Session
+        *tasks*, so there is no single call site to piggyback on. And an
+        ``InputRequired`` budget has to expire while **nothing is happening** — a user
+        who says nothing produces no events, so a sweep driven only by turn boundaries
+        would never fire, which is exactly the case the budget exists for (docs 14).
+
+        Sweeping first means an expiry is logged and shipped on the same tick.
+        """
+        while not self._closing:
+            for session in self._sessions.values():
+                session.sweep_runs()
+            entries = self._log.events[self._log_cursor :]
+            self._log_cursor += len(entries)
+            for e in entries:
+                j = from_log_event(e)
+                if j is not None:
+                    await self._emit(j)
+            await asyncio.sleep(0.05)
+
     async def _forward_drained(self) -> None:
+        """Forward mic audio to the active agent, but only between VAD START/END, with an
+        ACTIVITY_START/END-bracketed manual-activity turn and a pre-roll onset guard."""
+        active = self._router.active_id
         for cid, chunks in self._pipeline.drain().items():
             conn = self._conns.get(cid)
-            if conn is None:
+            if conn is None or cid != active:
                 continue
             rate = conn.adapter.capabilities.input_sample_rate
+            if not getattr(conn.adapter, "manual_activity", False):
+                # auto-VAD agent (e.g. translate): stream mic continuously, no markers.
+                for ch in chunks:
+                    await conn.send_realtime(MediaChunk.audio(ch, sample_rate=rate))
+                continue
+            if not self._in_speech:
+                # silent: retain as pre-roll (bounded), do not forward yet
+                self._preroll.extend(chunks)
+                continue
+            if not self._activity_open:
+                # In speech but activity not open yet: buffer until the segment carries
+                # >= min_open_bytes of real audio, so a spurious blip never emits markers
+                # (Gemini 1007s on a too-short activity). Then open + flush the buffer.
+                self._preroll.extend(chunks)
+                self._seg_bytes += sum(len(c) for c in chunks)
+                if self._seg_bytes < self._min_open_bytes:
+                    continue
+                await self._open_activity(conn)
+                for pre in self._preroll:
+                    await conn.send_realtime(MediaChunk.audio(pre, sample_rate=rate))
+                self._preroll.clear()
+                self._seg_bytes = 0
+                continue  # this tick's audio already flushed via the pre-roll
             n = 0
             for ch in chunks:
                 await conn.send_realtime(MediaChunk.audio(ch, sample_rate=rate))
@@ -274,6 +461,70 @@ class MultiAgentBridge:
             if self._mic_bytes - self._mic_logged > 96000:  # ~1s @16k mono
                 log.info("mic→%s: %d bytes total", cid, self._mic_bytes)
                 self._mic_logged = self._mic_bytes
+
+    async def _end_speech(self) -> None:
+        """Local VAD END: close the user turn and arm the TTFB timer — manual mode only.
+
+        ``t0`` is the last speech frame (END fires exactly ``hangover`` after it), so the
+        logged latency is the full end-of-speech→first-byte window.
+
+        Under an auto-VAD agent this returns early. It used to arm the timer there too,
+        on the theory that the local VAD "still knows where the user stopped" — it does
+        not. Its endpointer is not the one that ended the turn, and at the aggressive
+        hangover this bridge runs (10ms) it fires on any inter-word gap, freezing ``t0``
+        seconds before the user finished. Live logs showed the resulting TTFB inflated by
+        2.4–6.0s. The vendor reports its own boundary now (:meth:`_on_vendor_speech_end`).
+        """
+        self._in_speech = False
+        # discard any sub-threshold buffered segment that never opened an activity
+        self._seg_bytes = 0
+        self._preroll.clear()
+        if not self._manual_active():
+            return  # the vendor owns endpointing *and* the TTFB reference
+        if not self._activity_open:
+            return  # nothing was open → not a real turn
+        await self._close_activity()
+        self._ttfb_t0 = time.monotonic() - self._hangover_s
+        self._ttfb_pending = True
+        await self._emit(speech("speech_end"))
+
+    async def _on_vendor_speech_end(self) -> None:
+        """Vendor VAD committed end-of-speech: the turn is the model's from here.
+
+        Arrival time, not the moment Gemini decided — ``VoiceActivity.audio_offset`` is
+        documented but never populated, so one network hop (tens of ms) is baked in.
+
+        What this measures is deliberately *not* the old number. It starts after the
+        vendor's ``silence_duration_ms`` window has already elapsed, so it excludes the
+        endpointing wait and reports what the model is actually answerable for.
+        """
+        self._ttfb_t0 = time.monotonic()
+        self._ttfb_pending = True
+        await self._emit(speech("speech_end"))
+
+    def _manual_active(self) -> bool:
+        """Does the active agent's adapter want manual activity markers?"""
+        conn = self._conns.get(self._router.active_id)
+        return bool(conn is not None and getattr(conn.adapter, "manual_activity", False))
+
+    async def _open_activity(self, conn) -> None:
+        """Send ACTIVITY_START once per speech segment (idempotent — a double-start is a
+        Gemini 1007 precondition failure that kills the connection)."""
+        if self._activity_open:
+            return
+        await conn.send_realtime_control(RealtimeControl.ACTIVITY_START)
+        self._activity_open = True
+        log.info("→ACTIVITY_START (%s)", self._router.active_id)
+
+    async def _close_activity(self) -> None:
+        """Send ACTIVITY_END once (idempotent — an end-without-open is a 1007 too)."""
+        if not self._activity_open:
+            return
+        self._activity_open = False
+        conn = self._conns.get(self._router.active_id)
+        if conn is not None:
+            await conn.send_realtime_control(RealtimeControl.ACTIVITY_END)
+        log.info("→ACTIVITY_END (%s)", self._router.active_id)
 
     async def _handle_control(self, text: str) -> None:
         try:
@@ -316,18 +567,28 @@ class MultiAgentBridge:
         session = self._sessions[cid]
 
         async def on_msg(raw) -> None:
-            for ev in conn.adapter.parse_event(raw):
+            parsed = conn.adapter.parse_event(raw)  # parse once; reused by the session
+            for ev in parsed:
                 if isinstance(ev, Interrupted):
                     self._pipeline.cut()
+                if self._router.active_id == cid:
+                    # Vendor VAD boundaries. Only the token holder's count — a demoted
+                    # agent still hears the mic and would otherwise stamp t0 for a turn
+                    # the user is not having with it.
+                    if isinstance(ev, UserSpeechStart):
+                        await self._emit(speech("speech_start"))
+                    elif isinstance(ev, UserSpeechEnd):
+                        await self._on_vendor_speech_end()
+                    # TTFB is armed at end-of-speech; disarm on turn end so a stale
+                    # timer can't fire against the next turn.
+                    elif isinstance(ev, TurnComplete):
+                        self._ttfb_pending = False
                 j = to_client_json(ev, agent_id=cid)
                 if j is not None:
-                    txt = j.get("text")
-                    if txt is not None:
-                        log.info("event %s from %s: %r", j["type"], cid, txt[:80])
-                    else:
-                        log.info("event %s from %s", j["type"], cid)
+                    # No log line here: `_emit` logs every client event in full, and a
+                    # summary alongside it would just be a lossier duplicate.
                     await self._emit(j)
-            await session.on_vendor_raw(raw)
+            await session.on_events(parsed)  # was on_vendor_raw(raw) — no second parse
 
         return on_msg
 
@@ -338,7 +599,17 @@ class MultiAgentBridge:
         async def on_audio(pcm: bytes) -> None:
             if self._router.active_id != cid:
                 return  # only the token holder's audio reaches the client
+            # TTFB: first audio byte of this turn → log end-of-speech→first-byte latency.
+            if self._ttfb_pending and self._ttfb_t0 is not None:
+                self._ttfb_pending = False
+                ttfb_ms = (time.monotonic() - self._ttfb_t0) * 1000.0
+                log.info("TTFB %s end-of-speech→first-byte: %.0f ms", cid, ttfb_ms)
+                await self._emit(ttfb_event(cid, ttfb_ms))
             self._pipeline.on_vendor_audio(pcm, vendor_rate=rate)
+            # One WS binary message == one opus packet: the frontend downlink decodes each
+            # message as a single EncodedAudioChunk, so egress frames are NOT coalesced
+            # (concatenated opus packets would fail to decode). Per-frame send is required
+            # by the wire protocol; coalescing would need length-framing (out of scope).
             while True:
                 frame = self._pipeline.playout(cid)
                 if frame is None:
@@ -360,6 +631,11 @@ class MultiAgentBridge:
     async def _emit(self, obj: dict) -> None:
         if self._closing:
             return
+        # Every client event passes through here, so logging here is what makes the
+        # backend log a faithful record of what the UI was shown — the timeline becomes
+        # reconstructable from the log alone, which a browser tab is not. Audio does not
+        # come through this path (it is sent as binary frames), so this cannot flood.
+        log.info("→client %s", json.dumps(obj, default=str))
         try:
             await self._socket.send_text(json.dumps(obj))
         except Exception:  # noqa: BLE001 - client gone mid-send

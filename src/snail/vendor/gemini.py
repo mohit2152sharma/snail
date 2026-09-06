@@ -35,6 +35,8 @@ from .events import (
     ResumptionUpdate,
     ToolCallRequest,
     TurnComplete,
+    UserSpeechEnd,
+    UserSpeechStart,
     UserTranscript,
 )
 from .media import MediaChunk, MediaKind, RealtimeControl
@@ -85,6 +87,14 @@ def gemini_capabilities(
 
 class GeminiAdapter:
     """Translate the neutral surface to/from Gemini Live for one (model, backend)."""
+
+    #: Does the *caller* own endpointing? False (the default) means Gemini's automatic
+    #: activity detection runs and the caller just streams audio; a subclass that turns
+    #: automatic detection off must set this True and bracket each turn with
+    #: ACTIVITY_START/END markers. Sending markers into an auto-VAD session — or leaving
+    #: them out of a manual one — is a 1007 precondition failure that kills the socket,
+    #: so this flag is what callers branch on rather than guessing from the model name.
+    manual_activity: bool = False
 
     def __init__(
         self,
@@ -143,6 +153,18 @@ class GeminiAdapter:
             output_audio_transcription=types.AudioTranscriptionConfig(),
             # enable resumption; pass a handle to resume (docs 02).
             session_resumption=types.SessionResumptionConfig(handle=resumption_handle),
+            # Ask the server to report its own VAD decisions. Without this Gemini
+            # endpoints silently: nothing on the wire says when the user stopped
+            # talking, and a caller wanting that instant has to re-derive it from the
+            # audio with a local VAD — which measures a *different* endpointer than the
+            # one that actually ended the turn. With it, `voice_activity` arrives as
+            # UserSpeechStart / UserSpeechEnd.
+            #
+            # The SDK's field docstring describes the opposite direction (client → server
+            # signals); live probing against Vertex `gemini-live-2.5-flash` shows the
+            # server emitting ACTIVITY_START/ACTIVITY_END once it is set. Pointless under
+            # manual activity — there the caller already knows, it declared the boundary.
+            explicit_vad_signal=not self.manual_activity or None,
         )
         if setup.system_instruction:
             cfg.system_instruction = setup.system_instruction
@@ -253,15 +275,16 @@ class GeminiAdapter:
         }
 
     def serialize_tool_result(
-        self, *, call_id: str, name: str, content: str, meta: dict | None = None
+        self, *, call_id: str, name: str, payload: dict
     ) -> types.FunctionResponse:
         """Serialize a tool result to a Gemini ``FunctionResponse``.
 
-        The connection layer sends it via ``session.send_tool_response(...)``.
+        The connection layer sends it via ``session.send_tool_response(...)``. The
+        payload goes in verbatim — previously this flattened everything to a single
+        ``result`` string, which silently dropped ``status``/``retriable`` and left
+        no room for the structured ``input_required`` fields (docs 14).
         """
-        return types.FunctionResponse(
-            id=call_id, name=name, response={"result": content}
-        )
+        return types.FunctionResponse(id=call_id, name=name, response=payload)
 
     # --- inbound event parsing -------------------------------------------
 
@@ -288,6 +311,14 @@ class GeminiAdapter:
                 out.append(Interrupted())
             if getattr(sc, "turn_complete", None):
                 out.append(TurnComplete())
+
+        va = getattr(msg, "voice_activity", None)
+        if va is not None:
+            kind = getattr(va, "voice_activity_type", None)
+            if kind is types.VoiceActivityType.ACTIVITY_START:
+                out.append(UserSpeechStart())
+            elif kind is types.VoiceActivityType.ACTIVITY_END:
+                out.append(UserSpeechEnd())
 
         tc = getattr(msg, "tool_call", None)
         if tc is not None and tc.function_calls:

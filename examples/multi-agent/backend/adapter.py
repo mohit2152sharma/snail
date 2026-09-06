@@ -33,6 +33,9 @@ class TranslateGeminiAdapter(GeminiAdapter):
             response_modalities=[types.Modality.AUDIO],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            # Built from scratch, so it has to opt in to the server's VAD signals by
+            # hand — without them this agent reports no end-of-speech and no TTFB.
+            explicit_vad_signal=True,
             translation_config=types.TranslationConfig(
                 target_language_code=self._target,
                 echo_target_language=False,
@@ -53,5 +56,27 @@ class VadGeminiAdapter(GeminiAdapter):
                 prefix_padding_ms=300,
                 silence_duration_ms=800,
             )
+        )
+        return cfg
+
+
+class ManualVadGeminiAdapter(GeminiAdapter):
+    """GeminiAdapter with automatic VAD OFF — the bridge owns endpointing.
+
+    In manual-activity mode the model does not detect turn boundaries itself; the caller
+    must bracket the user's audio with ``activity_start`` / ``activity_end`` markers. The
+    ``MultiAgentBridge``'s :class:`~snail.audio.EnergyVad` sends those, so end-of-speech
+    is declared after a short hangover instead of Gemini's flat 800ms silence wait — the
+    dominant per-turn TTFB term.
+    """
+
+    #: The bridge sends ACTIVITY_START/END only to agents whose adapter advertises this;
+    #: auto-VAD agents (e.g. translate) must NOT receive manual markers (mismatch → 1007).
+    manual_activity = True
+
+    def build_setup(self, setup, *, resumption_handle: str | None = None):
+        cfg = super().build_setup(setup, resumption_handle=resumption_handle)
+        cfg.realtime_input_config = types.RealtimeInputConfig(
+            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
         )
         return cfg
